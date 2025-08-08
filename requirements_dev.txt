@@ -1,0 +1,25 @@
+# Development requirements for Mercury Energy NZ integration
+
+# Home Assistant
+homeassistant>=2023.1.0
+
+# Core dependencies
+aiohttp>=3.8.0
+voluptuous>=0.13.0
+mercury-co-nz-api>=1.0.2
+
+# Development tools
+black>=22.0.0
+flake8>=4.0.0
+isort>=5.10.0
+mypy>=0.910
+pre-commit>=2.15.0
+pylint>=2.12.0
+pytest>=6.2.0
+pytest-asyncio>=0.18.0
+pytest-cov>=3.0.0
+pytest-homeassistant-custom-component>=0.12.0
+
+# Testing utilities
+aioresponses>=0.7.0
+responses>=0.18.0

@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mercury.co.nz",
+        "description": "Enter your Mercury.co.nz account credentials",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Mercury.co.nz. Please check your credentials and try again."
+    },
+    "abort": {
+      "already_configured": "Account is already configured"
+    }
+  }
+}

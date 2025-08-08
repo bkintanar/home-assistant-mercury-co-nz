@@ -1,0 +1,5 @@
+# Runtime requirements for Mercury CO NZ Home Assistant integration
+# These are automatically installed by Home Assistant from manifest.json
+
+aiohttp>=3.8.0
+mercury-co-nz-api>=1.0.2
