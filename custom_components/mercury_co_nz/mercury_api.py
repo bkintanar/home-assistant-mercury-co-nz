@@ -9,6 +9,23 @@ import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
+# DRY Constants to eliminate magic numbers and repeated strings
+class APIConstants:
+    """Constants for API operations following DRY principles."""
+    DECIMAL_PLACES = 2
+    TEMP_DECIMAL_PLACES = 1
+    FALLBACK_ZERO = 0
+    FALLBACK_EMPTY_LIST = []
+
+    # Consistent logging messages
+    MSG_GETTING_HOURLY = "📊 Getting hourly electricity usage..."
+    MSG_GETTING_MONTHLY = "📊 Getting monthly electricity usage for extended history..."
+    MSG_SUCCESS_HOURLY = "✅ Hourly usage: %.2f kWh (%d data points, %d history entries)"
+    MSG_SUCCESS_MONTHLY = "✅ Monthly usage: %.2f kWh (%d monthly billing periods)"
+    MSG_ERROR_HOURLY = "⚠️ Could not get hourly usage: %s"
+    MSG_ERROR_MONTHLY = "⚠️ Could not get monthly usage: %s"
+    MSG_ERROR_EXTRACTION = "⚠️ Monthly data extraction failed! Falling back to daily_usage as temporary fix. Count: %d"
+
 try:
     from pymercury import MercuryClient
     PYMERCURY_AVAILABLE = True
@@ -331,6 +348,53 @@ class MercuryAPI:
 
 
 
+    async def _execute_api_call_with_fallback(self, api_method, customer_id, account_id, service_id,
+                                            usage_key, history_key, log_message, success_message, error_message):
+        """DRY helper method to eliminate repeated API call patterns."""
+        constants = APIConstants()
+        loop = asyncio.get_event_loop()
+
+        try:
+            _LOGGER.info(log_message)
+            result = await loop.run_in_executor(
+                None,
+                api_method,
+                customer_id, account_id, service_id
+            )
+
+            if result:
+                usage_value = round(result.total_usage, constants.DECIMAL_PLACES)
+                history_data = getattr(result, 'daily_usage', constants.FALLBACK_EMPTY_LIST) or constants.FALLBACK_EMPTY_LIST
+
+                # Special handling for monthly data
+                if 'monthly' in history_key:
+                    history_data = self._extract_monthly_usage_data(result)
+                    if not history_data and hasattr(result, 'daily_usage') and result.daily_usage:
+                        _LOGGER.warning(constants.MSG_ERROR_EXTRACTION, len(result.daily_usage))
+                        history_data = result.daily_usage
+
+                data_points = getattr(result, 'data_points', 0)
+                history_count = len(history_data)
+
+                _LOGGER.info(success_message, result.total_usage, data_points, history_count)
+
+                return {
+                    usage_key: usage_value,
+                    history_key: history_data
+                }
+            else:
+                return {
+                    usage_key: constants.FALLBACK_ZERO,
+                    history_key: constants.FALLBACK_EMPTY_LIST
+                }
+
+        except Exception as e:
+            _LOGGER.warning(error_message, e)
+            return {
+                usage_key: constants.FALLBACK_ZERO,
+                history_key: constants.FALLBACK_EMPTY_LIST
+            }
+
     async def get_usage_data(self, _retry_count: int = 0) -> dict[str, Any]:
         """Get comprehensive usage data from Mercury Energy using ElectricityUsage."""
         _LOGGER.debug("Getting usage data... (retry count: %d)", _retry_count)
@@ -399,62 +463,28 @@ class MercuryAPI:
                         # Process ElectricityUsage object into normalized data
             normalized_data = self._process_electricity_usage(electricity_usage)
 
-            # Get hourly usage data
-            try:
-                _LOGGER.info("📊 Getting hourly electricity usage...")
-                hourly_usage = await loop.run_in_executor(
-                    None,
-                    self._client._api_client.get_electricity_usage_hourly,
-                    customer_id, account_id, service_id
-                )
+            # Get hourly usage data using DRY helper method
+            constants = APIConstants()
+            hourly_result = await self._execute_api_call_with_fallback(
+                self._client._api_client.get_electricity_usage_hourly,
+                customer_id, account_id, service_id,
+                "hourly_usage", "hourly_usage_history",
+                constants.MSG_GETTING_HOURLY,
+                constants.MSG_SUCCESS_HOURLY,
+                constants.MSG_ERROR_HOURLY
+            )
+            normalized_data.update(hourly_result)
 
-                if hourly_usage:
-                    normalized_data["hourly_usage"] = round(hourly_usage.total_usage, 2)
-                    # Keep reasonable amount of hourly data to avoid overwhelming the system
-                    normalized_data["hourly_usage_history"] = hourly_usage.daily_usage[-48:]  # Last 48 hours
-                    _LOGGER.info("✅ Hourly usage: %.2f kWh (%d data points)",
-                                hourly_usage.total_usage, hourly_usage.data_points)
-                else:
-                    normalized_data["hourly_usage"] = 0
-                    normalized_data["hourly_usage_history"] = []
-
-            except Exception as e:
-                _LOGGER.warning("⚠️ Could not get hourly usage: %s", e)
-                normalized_data["hourly_usage"] = 0
-                normalized_data["hourly_usage_history"] = []
-
-            # Get monthly usage data for extended historical data
-            try:
-                _LOGGER.info("📊 Getting monthly electricity usage for extended history...")
-                monthly_usage = await loop.run_in_executor(
-                    None,
-                    self._client._api_client.get_electricity_usage_monthly,
-                    customer_id, account_id, service_id
-                )
-
-                if monthly_usage:
-                    normalized_data["monthly_usage"] = round(monthly_usage.total_usage, 2)
-                    # Include ALL available monthly data for extended history
-                    normalized_data["monthly_usage_history"] = monthly_usage.daily_usage  # All available months
-
-                    # If monthly data has more daily entries than our daily data, use it to extend history
-                    if (monthly_usage.daily_usage and
-                        len(monthly_usage.daily_usage) > len(normalized_data["daily_usage_history"])):
-                        _LOGGER.info("📅 Monthly API provided more historical data (%d vs %d days), using monthly data for extended history",
-                                   len(monthly_usage.daily_usage), len(normalized_data["daily_usage_history"]))
-                        normalized_data["daily_usage_history"] = monthly_usage.daily_usage
-
-                    _LOGGER.info("✅ Monthly usage: %.2f kWh (%d data points, %d daily history entries)",
-                                monthly_usage.total_usage, monthly_usage.data_points,
-                                len(monthly_usage.daily_usage) if monthly_usage.daily_usage else 0)
-                else:
-                    normalized_data["monthly_usage"] = 0
-                    normalized_data["monthly_usage_history"] = []
-
-            except Exception as e:
-                _LOGGER.warning("⚠️ Could not get monthly usage: %s", e)
-                normalized_data["monthly_usage"] = 0
-                normalized_data["monthly_usage_history"] = []
+            # Get monthly usage data using DRY helper method
+            monthly_result = await self._execute_api_call_with_fallback(
+                self._client._api_client.get_electricity_usage_monthly,
+                customer_id, account_id, service_id,
+                "monthly_usage", "monthly_usage_history",
+                constants.MSG_GETTING_MONTHLY,
+                constants.MSG_SUCCESS_MONTHLY,
+                constants.MSG_ERROR_MONTHLY
+            )
+            normalized_data.update(monthly_result)
 
             # Add customer info
             normalized_data["customer_id"] = customer_id
@@ -488,40 +518,39 @@ class MercuryAPI:
     def _process_electricity_usage(self, usage: Any) -> dict[str, Any]:
         """Process ElectricityUsage object into normalized sensor data."""
         normalized_data = {}
+        constants = APIConstants()  # Define constants at method start for DRY principles
 
         try:
             # Basic usage statistics
-            normalized_data["total_usage"] = round(usage.total_usage, 2)
-            normalized_data["average_daily_usage"] = round(usage.average_daily_usage, 2)
-            normalized_data["current_bill"] = round(usage.total_cost, 2)
+            normalized_data["total_usage"] = round(usage.total_usage, constants.DECIMAL_PLACES)
+            normalized_data["average_daily_usage"] = round(usage.average_daily_usage, constants.DECIMAL_PLACES)
+            normalized_data["current_bill"] = round(usage.total_cost, constants.DECIMAL_PLACES)
 
             # Get latest day's data
             if usage.daily_usage:
                 latest_day = usage.daily_usage[-1]
-                normalized_data["latest_daily_usage"] = latest_day.get('consumption', 0)
-                normalized_data["latest_daily_cost"] = latest_day.get('cost', 0)
+                normalized_data["latest_daily_usage"] = latest_day.get('consumption', constants.FALLBACK_ZERO)
+                normalized_data["latest_daily_cost"] = latest_day.get('cost', constants.FALLBACK_ZERO)
             else:
-                normalized_data["latest_daily_usage"] = 0
-                normalized_data["latest_daily_cost"] = 0
+                normalized_data["latest_daily_usage"] = constants.FALLBACK_ZERO
+                normalized_data["latest_daily_cost"] = constants.FALLBACK_ZERO
 
-            # Temperature data
+            # Temperature data using constants
             if usage.average_temperature is not None:
-                normalized_data["average_temperature"] = round(usage.average_temperature, 1)
+                normalized_data["average_temperature"] = round(usage.average_temperature, constants.TEMP_DECIMAL_PLACES)
             else:
-                normalized_data["average_temperature"] = 0
+                normalized_data["average_temperature"] = constants.FALLBACK_ZERO
 
             # Current temperature (from latest temperature reading)
             if usage.temperature_data:
                 latest_temp = usage.temperature_data[-1]
-                normalized_data["current_temperature"] = latest_temp.get('temp', 0)
+                normalized_data["current_temperature"] = latest_temp.get('temp', constants.FALLBACK_ZERO)
             else:
-                normalized_data["current_temperature"] = 0
+                normalized_data["current_temperature"] = constants.FALLBACK_ZERO
 
-            # Store detailed data for graph cards (keep all available days up to 14)
-            # Include ALL available daily usage data (not just last 14 days)
-            normalized_data["daily_usage_history"] = usage.daily_usage if usage.daily_usage else []
-            # Include ALL available temperature data (not just last 14 days)
-            normalized_data["temperature_history"] = usage.temperature_data if usage.temperature_data else []
+            # Store detailed data for graph cards using constants for fallbacks
+            normalized_data["daily_usage_history"] = usage.daily_usage if usage.daily_usage else constants.FALLBACK_EMPTY_LIST
+            normalized_data["temperature_history"] = usage.temperature_data if usage.temperature_data else constants.FALLBACK_EMPTY_LIST
 
             _LOGGER.debug("Processed ElectricityUsage: %s kWh total, %s days",
                          usage.total_usage, usage.data_points)
@@ -620,6 +649,53 @@ class MercuryAPI:
 
 
 
+
+    def _extract_monthly_usage_data(self, monthly_usage):
+        """Extract proper monthly usage data from the dedicated monthly endpoint."""
+        try:
+            # Check if this is a pymercury ElectricityUsage object with usage_data
+            if hasattr(monthly_usage, 'usage_data') and monthly_usage.usage_data:
+                usage_data = monthly_usage.usage_data
+
+                # Check if usage_data is directly the list of monthly billing periods
+                if isinstance(usage_data, list) and len(usage_data) > 0:
+                    # Check if it looks like monthly billing data (has invoiceFrom/invoiceTo)
+                    first_entry = usage_data[0]
+                    if isinstance(first_entry, dict) and 'invoiceFrom' in first_entry and 'invoiceTo' in first_entry:
+                        return usage_data
+
+                # Fallback: Check if usage_data has nested structure
+                if isinstance(usage_data, dict) and 'usage' in usage_data:
+                    usage_array = usage_data['usage']
+                    if usage_array and len(usage_array) > 0:
+                        actual_usage = next((u for u in usage_array if u.get('label') == 'actual'), usage_array[0])
+                        if 'data' in actual_usage:
+                            return actual_usage['data']
+
+            # Try other possible data locations
+            for attr_name in ['raw_data', 'data']:
+                if hasattr(monthly_usage, attr_name):
+                    raw_data = getattr(monthly_usage, attr_name)
+                    if isinstance(raw_data, dict) and 'usage' in raw_data:
+                        usage_array = raw_data['usage']
+                        if usage_array and len(usage_array) > 0:
+                            actual_usage = next((u for u in usage_array if u.get('label') == 'actual'), usage_array[0])
+                            if 'data' in actual_usage:
+                                return actual_usage['data']
+
+            # Check if monthly_usage itself is the raw dict structure
+            if isinstance(monthly_usage, dict) and 'usage' in monthly_usage:
+                usage_array = monthly_usage['usage']
+                if usage_array and len(usage_array) > 0:
+                    actual_usage = next((u for u in usage_array if u.get('label') == 'actual'), usage_array[0])
+                    if 'data' in actual_usage:
+                        return actual_usage['data']
+
+            return []
+
+        except Exception as e:
+            _LOGGER.error("Error extracting monthly usage data: %s", e)
+            return []
 
     async def close(self) -> None:
         """Close the API client."""

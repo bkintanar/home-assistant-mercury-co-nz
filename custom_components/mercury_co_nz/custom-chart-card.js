@@ -5,16 +5,200 @@ class ChartJSCustomCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
+
+    // Constants to eliminate magic numbers
+    this.CONSTANTS = {
+      ITEMS_PER_PAGE: 12,
+      FONT_SIZE_SMALL: 12,
+      PADDING_STANDARD: 12,
+      BORDER_RADIUS: 12,
+      TOOLTIP_PADDING: '8px 12px',
+      MAX_LOAD_RETRIES: 3,
+      CHART_DELAY: 10,
+      RETRY_DELAY: 50,
+      HOURLY_LABELS: [0, 6, 12, 18],
+      HOURLY_LABEL_MAP: {0: '12am', 6: '6am', 12: '12pm', 18: '6pm'}
+    };
+
     this.currentPage = 0;
-    this.itemsPerPage = 12;
+    this.itemsPerPage = this.CONSTANTS.ITEMS_PER_PAGE;
     this.chart = null;
     this.chartLoaded = false;
     this.chartLoadPromise = null;
     this.loadRetryCount = 0;
-    this.maxLoadRetries = 3;
+    this.maxLoadRetries = this.CONSTANTS.MAX_LOAD_RETRIES;
     this.stickyTooltip = false;
     this.selectedDate = null; // Track the currently selected date
     this.isRendering = false;
+    this.currentPeriod = 'daily'; // Track current time period
+    this.currentHourlyDate = new Date(); // Track current date for hourly view
+    this.selectedHour = null; // Track selected hour in hourly view
+
+    // Color constants
+    this.CHART_COLORS = {
+      PRIMARY_YELLOW: 'rgb(255, 240, 0)',
+      TEMPERATURE_BLUE: 'rgb(105, 162, 185)'
+    };
+  }
+
+  // ===== HELPER METHODS (DRY PRINCIPLE) =====
+
+  // Extract common pagination logic to eliminate duplication
+  calculatePagination(data) {
+    const sortedData = data.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    let startIndex = this.currentPage * this.itemsPerPage;
+    let endIndex = (this.currentPage + 1) * this.itemsPerPage;
+
+    // Smart pagination logic for page 1
+    if (this.currentPage === 1) {
+      const remainingItems = sortedData.length - this.itemsPerPage;
+      if (remainingItems > 0 && remainingItems < this.itemsPerPage) {
+        startIndex = remainingItems;
+        endIndex = sortedData.length;
+      }
+    }
+
+    return {
+      sortedData,
+      startIndex,
+      endIndex,
+      pageData: sortedData.slice(startIndex, endIndex).sort((a, b) => new Date(a.date) - new Date(b.date))
+    };
+  }
+
+  // Cache DOM elements to avoid repeated queries
+  get elements() {
+    if (!this._elements) {
+      this._elements = {
+        navDate: () => this.shadowRoot.querySelector('#navDate'),
+        dataInfo: () => this.shadowRoot.querySelector('.data-info'),
+        chartContainer: () => this.shadowRoot.querySelector('.chart-container'),
+        navigation: () => this.shadowRoot.querySelector('.navigation'),
+        card: () => this.shadowRoot.querySelector('ha-card'),
+        canvas: () => this.shadowRoot.querySelector('#energyChart'),
+        cardHeader: () => this.shadowRoot.querySelector('.card-header h3'),
+        periodButtons: () => this.shadowRoot.querySelectorAll('.period-btn')
+      };
+    }
+    return this._elements;
+  }
+
+  // Helper method for formatting hour display (12am, 3pm, etc.)
+  formatHourDisplay(hour) {
+    return hour === 0 ? '12am' :
+           hour < 12 ? `${hour}am` :
+           hour === 12 ? '12pm' :
+           `${hour - 12}pm`;
+  }
+
+  // Helper method for common date formatting patterns
+  formatDate(date, options = {}) {
+    const defaultOptions = {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    };
+    return date.toLocaleDateString("en-NZ", { ...defaultOptions, ...options });
+  }
+
+  // Helper method for entity validation and retrieval
+  getEntity() {
+    if (!this._hass || !this.config.entity) return null;
+    return this._hass.states[this.config.entity];
+  }
+
+  // Helper method for updating navigation date display
+  updateNavigationDate() {
+    const navDate = this.getNavDateElement();
+    if (navDate) {
+      navDate.innerHTML = this.getCurrentDateDescription().replace(/\n/g, '<br/>');
+    }
+  }
+
+  // ===== DOM ELEMENT CACHING (Performance) =====
+
+  // Cached getters for frequently accessed DOM elements
+  // Use cached element getters instead of repeated queries
+  getNavDateElement() {
+    return this.elements.navDate();
+  }
+
+  getDataInfoElement() {
+    return this.elements.dataInfo();
+  }
+
+  getChartContainerElement() {
+    return this.elements.chartContainer();
+  }
+
+  getNavigationElement() {
+    return this.elements.navigation();
+  }
+
+  // ===== LOGGING HELPER =====
+
+  log(message, category = 'info') {
+    const emojis = {
+      info: '📊',
+      date: '📅',
+      nav: '🔙',
+      next: '🔜',
+      error: '❌',
+      success: '✅'
+    };
+    // console.log(`${emojis[category] || '📊'} ${message}`);
+  }
+
+  // ===== HTML GENERATION HELPERS =====
+
+  // Generate usage details HTML for data display
+  generateUsageDetailsHTML(dateText, hourDisplay, cost, usage, isHourly = false) {
+    const usageText = isHourly
+      ? `Your usage at ${hourDisplay} on ${dateText}`
+      : `Your usage on ${dateText}`;
+
+    return `
+      <div class="usage-details">
+        <div class="usage-date">${usageText}</div>
+        <div class="usage-stats">$${cost.toFixed(2)} | ${usage.toFixed(2)} kWh</div>
+      </div>
+    `;
+  }
+
+  // Generate custom legend HTML based on current period
+  generateCustomLegendHTML() {
+    const actualLegend = `
+      <div class="legend-item">
+        <div class="legend-circle"></div>
+        <span class="legend-label">Actual</span>
+      </div>
+    `;
+
+    const temperatureLegend = `
+      <div class="legend-item">
+        <div class="legend-line"></div>
+        <span class="legend-label">Average Temperature</span>
+      </div>
+    `;
+
+    // Only show temperature legend for daily view
+    const showTemperature = this.currentPeriod === 'daily';
+
+    return `
+      <div class="custom-legend">
+        ${actualLegend}
+        ${showTemperature ? temperatureLegend : ''}
+      </div>
+    `;
+  }
+
+  // Update the legend when period changes
+  updateCustomLegend() {
+    const existingLegend = this.shadowRoot.querySelector('.custom-legend');
+    if (existingLegend) {
+      existingLegend.outerHTML = this.generateCustomLegendHTML();
+    }
   }
 
   async setConfig(config) {
@@ -27,11 +211,7 @@ class ChartJSCustomCard extends HTMLElement {
       chart_type: 'bar', // bar, line, area, mixed
       show_navigation: true,
       items_per_page: 12,
-      cost_per_kwh: 0.25, // Default cost per kWh for calculations
-      colors: {
-        usage: '#FFF000',
-        temperature: '#69A2B9'
-      },
+      // No default cost rate needed - using actual Mercury Energy costs
       ...config
     };
 
@@ -63,7 +243,7 @@ class ChartJSCustomCard extends HTMLElement {
         });
 
         const script = document.createElement('script');
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.js';
+        script.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js';
 
         const cleanup = () => {
           script.onload = null;
@@ -76,7 +256,7 @@ class ChartJSCustomCard extends HTMLElement {
           if (window.Chart) {
             this.chartLoaded = true;
             this.loadRetryCount = 0;
-            console.log('📊 Chart.js loaded successfully');
+            this.log('Chart.js loaded successfully', 'success');
             resolve();
           } else {
             // Chart.js script loaded but Chart object not available, retry
@@ -214,7 +394,7 @@ class ChartJSCustomCard extends HTMLElement {
       return;
     }
 
-    const entity = this._hass.states[this.config.entity];
+    const entity = this.getEntity();
 
     // Handle missing or unavailable entity
     if (!entity || entity.state === 'unavailable' || entity.state === 'unknown') {
@@ -241,8 +421,13 @@ class ChartJSCustomCard extends HTMLElement {
     // Entity is available - clear any connection status
     this.updateConnectionStatus(true);
 
-    // Only do full render if DOM doesn't exist yet or if chart was destroyed
-    if (!this.shadowRoot.querySelector('ha-card') || !this.chart) {
+    // More robust chart existence check - detect all scenarios requiring full render
+    const hasCard = !!this.shadowRoot.querySelector('ha-card');
+    const hasChart = !!this.chart;
+    const hasCanvas = !!this.shadowRoot.querySelector('#energyChart');
+    const needsFullRender = !hasCard || !hasChart || !hasCanvas;
+
+        if (needsFullRender) {
       this.fullRender(entity);
     } else {
       // Just update the chart data
@@ -265,6 +450,8 @@ class ChartJSCustomCard extends HTMLElement {
           <canvas id="energyChart"></canvas>
         </div>
 
+        ${this.generateCustomLegendHTML()}
+
         <div class="chart-info">
           <div class="data-info">
             ${this.getLatestDateDescription()}
@@ -273,8 +460,13 @@ class ChartJSCustomCard extends HTMLElement {
       </ha-card>
     `;
 
-    this.attachEventListeners();
-    this.createChart(entity);
+    this.attachPeriodEventListeners();
+    this.attachNavigationEventListeners();
+
+    // Small delay to ensure DOM is fully rendered before creating chart
+    setTimeout(() => {
+      this.createChart(entity);
+    }, 10);
   }
 
   updateConnectionStatus(isConnected) {
@@ -314,14 +506,25 @@ class ChartJSCustomCard extends HTMLElement {
 
     // Page info removed - no longer displayed
 
-    const dataInfo = this.shadowRoot.querySelector('.data-info');
+    const dataInfo = this.getDataInfoElement();
     if (dataInfo) {
       this.resetInfoDisplay();
     }
 
-    // Get updated data
-    const rawUsageData = entity.attributes.daily_usage_history || [];
-    const rawTempData = entity.attributes.recent_temperatures || [];
+    // Get updated data based on current period
+    let rawUsageData, rawTempData;
+
+    if (this.currentPeriod === 'hourly') {
+      rawUsageData = entity.attributes.hourly_usage_history || [];
+      rawTempData = []; // No temperature data for hourly view
+    } else if (this.currentPeriod === 'monthly') {
+      rawUsageData = entity.attributes.monthly_usage_history || [];
+      rawTempData = []; // No temperature data for monthly view
+    } else {
+      rawUsageData = entity.attributes.daily_usage_history || [];
+      rawTempData = entity.attributes.recent_temperatures || [];
+    }
+
     const chartData = this.processChartData(rawUsageData, rawTempData);
 
 
@@ -329,7 +532,11 @@ class ChartJSCustomCard extends HTMLElement {
     // Update chart data without destroying/recreating
     this.chart.data.labels = chartData.labels;
     this.chart.data.datasets[0].data = chartData.usage;
-    this.chart.data.datasets[1].data = chartData.temperature;
+
+    // Only update temperature data if the dataset exists (not for hourly view)
+    if (this.chart.data.datasets[1]) {
+      this.chart.data.datasets[1].data = chartData.temperature;
+    }
 
 
 
@@ -343,14 +550,7 @@ class ChartJSCustomCard extends HTMLElement {
     };
 
         // Animate the update (use 'none' to prevent any animation-related scrolling)
-    console.log('📊 Chart data being set:', {
-      labels: this.chart.data.labels,
-      usageData: this.chart.data.datasets[0].data,
-      firstDate: this.chart.data.labels[0],
-      lastDate: this.chart.data.labels[this.chart.data.labels.length - 1]
-    });
     this.chart.update('none');
-    console.log('📊 Chart update completed');
 
     // Restore scroll position if it changed
     setTimeout(() => {
@@ -398,12 +598,47 @@ class ChartJSCustomCard extends HTMLElement {
     }
 
     try {
-      // Get data from your mercury energy sensor - matching your ApexCharts setup
-      const rawUsageData = entity.attributes.daily_usage_history || [];
-      const rawTempData = entity.attributes.recent_temperatures || [];
+      // Get data based on current period
+      let rawUsageData, rawTempData;
+
+            if (this.currentPeriod === 'hourly') {
+        rawUsageData = entity.attributes.hourly_usage_history || [];
+        rawTempData = []; // No temperature data for hourly view
+
+        // Set currentHourlyDate to the latest available date from the data
+        if (rawUsageData.length > 0) {
+          // Find the latest date in the hourly data
+          const sortedData = rawUsageData.sort((a, b) => new Date(b.datetime || b.date) - new Date(a.datetime || a.date));
+          const latestDataItem = sortedData[0];
+
+          if (latestDataItem && (latestDataItem.datetime || latestDataItem.date)) {
+            const latestDataDate = new Date(latestDataItem.datetime || latestDataItem.date);
+
+            // Only update if this is the first time loading hourly or if we don't have a current date set
+            if (!this.currentHourlyDate || this.currentHourlyDate > latestDataDate) {
+              this.currentHourlyDate = latestDataDate;
+              this.log(`Set hourly date to latest available data: ${this.currentHourlyDate.toDateString()}`, 'date');
+            }
+          }
+        }
+
+        // Fallback: if no data available, use today's date (but limit to reasonable past)
+        if (!this.currentHourlyDate) {
+          const today = new Date();
+          today.setDate(today.getDate() - 1); // Default to yesterday if no data
+          this.currentHourlyDate = today;
+          console.log('📅 No hourly data available, defaulting to yesterday:', this.currentHourlyDate.toDateString());
+        }
+      } else if (this.currentPeriod === 'monthly') {
+        rawUsageData = entity.attributes.monthly_usage_history || [];
+        rawTempData = []; // No temperature data for monthly view
+      } else {
+        rawUsageData = entity.attributes.daily_usage_history || [];
+        rawTempData = entity.attributes.recent_temperatures || [];
+      }
 
       // If no fresh data available but we have cached data, use it
-      if ((!rawUsageData.length || !rawTempData.length) && this.lastKnownData) {
+      if ((!rawUsageData.length || (!rawTempData.length && this.currentPeriod !== 'hourly')) && this.lastKnownData) {
         console.log('📊 Using cached data during reconnection');
         // We'll still create the chart but with a loading indicator
       }
@@ -411,8 +646,19 @@ class ChartJSCustomCard extends HTMLElement {
     // Process data for current page
     const chartData = this.processChartData(rawUsageData, rawTempData);
 
-    const canvas = this.shadowRoot.getElementById('energyChart');
+        const canvas = this.shadowRoot.getElementById('energyChart');
+    if (!canvas) {
+      // Retry after a short delay if canvas not ready
+      setTimeout(() => {
+        this.createChart(entity);
+      }, 50);
+      return;
+    }
+
     const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      return;
+    }
 
     // Destroy existing chart if it exists
     if (this.chart) {
@@ -425,43 +671,32 @@ class ChartJSCustomCard extends HTMLElement {
       temp: chartData.rawTemp
     };
 
+    // Get chart configuration based on current period
+    const chartConfig = this.getChartConfig(chartData);
+
     // Create new Chart.js chart
-    this.chart = new Chart(ctx, {
-      type: 'bar',
+    this.chart = new Chart(ctx, chartConfig);
+
+    // Auto-select the latest data point (last index since data is sorted oldest to newest)
+    if (chartData.usage.length > 0) {
+      const latestIndex = chartData.usage.length - 1;
+      this.handleChartClick(latestIndex);
+    }
+
+    // Always update navigation after chart creation (especially important for hourly view)
+    this.updateNavigation();
+
+    } catch (error) {
+      console.error('📊 Error creating chart:', error);
+      this.showErrorState('Failed to create chart: ' + error.message);
+    }
+  }
+
+  getChartConfig(chartData) {
+    const baseConfig = {
       data: {
         labels: chartData.labels,
-        datasets: [
-          {
-            label: 'Usage (kWh)',
-            data: chartData.usage,
-            backgroundColor: 'rgba(255, 240, 0, 0.8)',
-            borderColor: '#FFF000',
-            borderWidth: 2,
-            borderRadius: {
-              topLeft: 3,
-              topRight: 3,
-              bottomLeft: 0,
-              bottomRight: 0
-            },
-            type: 'bar',
-            yAxisID: 'y',
-            order: 2  // Higher number = rendered behind
-          },
-          {
-            label: 'Temperature (°C)',
-            data: chartData.temperature,
-            backgroundColor: 'rgba(105, 162, 185, 0.1)',
-            borderColor: 'rgb(105, 162, 185)',
-            borderWidth: 3,
-            type: 'line',
-            fill: false,
-            tension: 0.4,
-            pointRadius: 0,        // Remove circles
-            pointHoverRadius: 0,   // Remove hover circles
-            yAxisID: 'y',
-            order: 1  // Lower number = rendered on top
-          }
-        ]
+        datasets: this.getDatasets(chartData)
       },
       options: {
         responsive: true,
@@ -530,6 +765,24 @@ class ChartJSCustomCard extends HTMLElement {
             }
           }
         },
+        animation: {
+          duration: 1500,
+          easing: 'easeOutCubic',
+          y: {
+            duration: 1500,
+            easing: 'easeOutCubic',
+            from: (ctx) => {
+              if (ctx.type === 'data' && ctx.mode === 'default') {
+                const chart = ctx.chart;
+                const {chartArea, scales} = chart;
+                if (chartArea && scales.y) {
+                  return scales.y.bottom;
+                }
+              }
+              return 0;
+            }
+          }
+        },
         onClick: (event, elements) => {
           if (elements.length > 0) {
             const dataIndex = elements[0].index;
@@ -551,47 +804,216 @@ class ChartJSCustomCard extends HTMLElement {
           event.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
         }
       }
-    });
+    };
 
-    // Auto-select the latest data point (last index since data is sorted oldest to newest)
-    if (chartData.usage.length > 0) {
-      const latestIndex = chartData.usage.length - 1;
-      this.handleChartClick(latestIndex);
+    // Set chart type based on current period
+    switch (this.currentPeriod) {
+      case 'hourly':
+        baseConfig.type = 'bar';
+        // Update x-axis for hourly view to show only 4 labels
+        baseConfig.options.scales.x.ticks.callback = function(value, index, values) {
+          const labelsToShow = [0, 6, 12, 18]; // Hours to show: 12am, 6am, 12pm, 6pm
+          const labelMap = {0: '12am', 6: '6am', 12: '12pm', 18: '6pm'};
+
+          if (labelsToShow.includes(index)) {
+            return labelMap[index];
+          }
+          return '';
+        };
+        break;
+      case 'monthly':
+        baseConfig.type = 'bar';
+        // Keep scales for bar chart
+        break;
+      case 'daily':
+      default:
+        baseConfig.type = 'bar';
+        break;
     }
 
-    } catch (error) {
-      console.error('📊 Error creating chart:', error);
-      this.showErrorState('Failed to create chart: ' + error.message);
+    return baseConfig;
+  }
+
+  getDatasets(chartData) {
+    switch (this.currentPeriod) {
+      case 'hourly':
+        return [
+          {
+            label: 'Usage (kWh)',
+            data: chartData.usage,
+            backgroundColor: this.CHART_COLORS.PRIMARY_YELLOW,
+            borderColor: this.CHART_COLORS.PRIMARY_YELLOW,
+            borderWidth: 2,
+            borderRadius: {
+              topLeft: 3,
+              topRight: 3,
+              bottomLeft: 0,
+              bottomRight: 0
+            },
+            yAxisID: 'y'
+          }
+        ];
+      case 'monthly':
+        return [
+          {
+            label: 'Monthly Usage (kWh)',
+            data: chartData.usage,
+            backgroundColor: this.CHART_COLORS.PRIMARY_YELLOW,
+            borderColor: this.CHART_COLORS.PRIMARY_YELLOW,
+            borderWidth: 2,
+            borderRadius: {
+              topLeft: 3,
+              topRight: 3,
+              bottomLeft: 0,
+              bottomRight: 0
+            },
+            maxBarThickness: 60,  // Limit bar width for better appearance
+            categoryPercentage: 0.8,  // Control spacing between categories
+            barPercentage: 0.9,  // Control bar width within category
+            type: 'bar',
+            yAxisID: 'y',
+            order: 1
+          }
+        ];
+      case 'daily':
+      default:
+        return [
+          {
+            label: 'Usage (kWh)',
+            data: chartData.usage,
+            backgroundColor: this.CHART_COLORS.PRIMARY_YELLOW,
+            borderColor: this.CHART_COLORS.PRIMARY_YELLOW,
+            borderWidth: 2,
+            borderRadius: {
+              topLeft: 3,
+              topRight: 3,
+              bottomLeft: 0,
+              bottomRight: 0
+            },
+            type: 'bar',
+            yAxisID: 'y',
+            order: 2
+          },
+          {
+            label: 'Temperature (°C)',
+            data: chartData.temperature,
+            backgroundColor: this.CHART_COLORS.TEMPERATURE_BLUE,
+            borderColor: this.CHART_COLORS.TEMPERATURE_BLUE,
+            borderWidth: 3,
+            type: 'line',
+            fill: false,
+            tension: 0.4,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            yAxisID: 'y',
+            order: 1
+          }
+        ];
     }
   }
 
+  // ===== DATA PROCESSING METHODS (Split for clarity) =====
+
   processChartData(usageData, tempData) {
-    // Sort data newest first for pagination calculation
-    const sortedUsageData = usageData.sort((a, b) => new Date(b.date) - new Date(a.date));
-    const sortedTempData = tempData.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-        // Smart pagination logic
-    let startIndex = this.currentPage * this.itemsPerPage;
-    let endIndex = (this.currentPage + 1) * this.itemsPerPage;
-
-            // If we're on page 1, check if we should show all data instead of just overflow
-    if (this.currentPage === 1) {
-      const remainingItems = sortedUsageData.length - this.itemsPerPage;
-      // If there are fewer than a full page of remaining items, show ALL data from beginning
-      if (remainingItems > 0 && remainingItems < this.itemsPerPage) {
-        startIndex = remainingItems; // Start from the overflow amount to show different dates
-        endIndex = sortedUsageData.length; // Show to the end
-      }
+    // Handle hourly data differently
+    if (this.currentPeriod === 'hourly') {
+      return this.processHourlyData(usageData);
     }
 
-    // Slice the data based on calculated indices
-    const sortedUsage = sortedUsageData
-      .slice(startIndex, endIndex)
-      .sort((a, b) => new Date(a.date) - new Date(b.date)); // Re-sort oldest first for chart display
+    // Handle monthly data differently
+    if (this.currentPeriod === 'monthly') {
+      return this.processMonthlyData(usageData);
+    }
 
-    const sortedTemp = sortedTempData
-      .slice(startIndex, endIndex)
-      .sort((a, b) => new Date(a.date) - new Date(b.date)); // Re-sort oldest first for chart display
+    return this.processDailyMonthlyData(usageData, tempData);
+  }
+
+  processHourlyData(usageData) {
+      // Filter data for the selected date
+      let filteredData = [];
+
+      if (this.currentHourlyDate) {
+        const targetDateStr = this.currentHourlyDate.toDateString();
+
+        filteredData = usageData.filter(item => {
+          const itemDate = new Date(item.datetime || item.date);
+          return itemDate.toDateString() === targetDateStr;
+        });
+
+        // Sort by hour
+        filteredData.sort((a, b) => {
+          const hourA = new Date(a.datetime || a.date).getHours();
+          const hourB = new Date(b.datetime || b.date).getHours();
+          return hourA - hourB;
+        });
+      } else {
+        // Fallback: use last 24 hours if no specific date is set
+        const sortedUsageData = usageData.sort((a, b) => new Date(b.datetime || b.date) - new Date(a.datetime || a.date));
+        filteredData = sortedUsageData.slice(0, 24).reverse();
+      }
+
+      // Create hour labels for 24 hours - create 24 labels regardless of data
+      const labels = Array.from({length: 24}, (_, index) => {
+        return `${index}:00`;
+      });
+
+      // Extract values - ensure we have exactly 24 values (one for each hour)
+      const usageValues = Array.from({length: 24}, (_, hour) => {
+        // Find data point for this specific hour
+        const dataPoint = filteredData.find(item => {
+          const itemHour = new Date(item.datetime || item.date).getHours();
+          return itemHour === hour;
+        });
+        return dataPoint ? Number(dataPoint.consumption || dataPoint.usage || 0) : 0;
+      });
+
+      // Create rawUsage array that matches the 24-hour structure for click handling
+      const rawUsageArray = Array.from({length: 24}, (_, hour) => {
+        const dataPoint = filteredData.find(item => {
+          const itemHour = new Date(item.datetime || item.date).getHours();
+          return itemHour === hour;
+        });
+        return dataPoint || { hour: hour, consumption: 0, usage: 0 };
+      });
+
+      return {
+        labels: labels,
+        usage: usageValues,
+        temperature: [], // No temperature for hourly
+        rawUsage: rawUsageArray,
+        rawTemp: []
+      };
+  }
+
+  processMonthlyData(usageData) {
+
+    // Use DRY pagination method
+    const {pageData: sortedUsage} = this.calculatePagination(usageData);
+
+        // Create labels formatted as "24 Jun", "24 Jul" for monthly billing dates
+    const labels = sortedUsage.map(dp => {
+      const date = new Date(dp.date);
+      const day = date.getDate();
+      const month = date.toLocaleDateString("en-NZ", { month: "short" });
+      return `${day} ${month}`;
+    });
+
+    // Extract values using the data structure
+    const usageValues = sortedUsage.map(dp => Number(dp.consumption));
+
+    return {
+      labels: labels,
+      usage: usageValues,
+      temperature: [], // No temperature for monthly
+      rawUsage: sortedUsage,  // Keep raw data for popups
+      rawTemp: []     // No temperature data for monthly
+    };
+  }
+
+  processDailyMonthlyData(usageData, tempData) {
+    // Use DRY pagination method for both usage and temperature data
+    const {pageData: sortedUsage} = this.calculatePagination(usageData);
+    const {pageData: sortedTemp} = this.calculatePagination(tempData);
 
     // Create labels from usage data (using same format as your ApexCharts)
     const labels = sortedUsage.map(dp =>
@@ -621,6 +1043,11 @@ class ChartJSCustomCard extends HTMLElement {
   showTemperatureTooltip(event, dataIndex) {
     // Remove any existing custom tooltip
     this.hideCustomTooltip();
+
+    // Skip tooltip for hourly view (no temperature data)
+    if (this.currentPeriod === 'hourly' || !this.chart.data.datasets[1]) {
+      return;
+    }
 
     // Get temperature data
     const tempValue = this.chart.data.datasets[1].data[dataIndex];
@@ -662,7 +1089,7 @@ class ChartJSCustomCard extends HTMLElement {
     tooltip.style.zIndex = '10000';
 
     // Position relative to the chart container first
-    const chartContainer = this.shadowRoot.querySelector('.chart-container');
+    const chartContainer = this.getChartContainerElement();
     chartContainer.style.position = 'relative';
 
     // Add tooltip to DOM first so we can measure it
@@ -740,7 +1167,7 @@ class ChartJSCustomCard extends HTMLElement {
 
   hideCustomTooltip() {
     // Look for all tooltip elements in chart container
-    const chartContainer = this.shadowRoot.querySelector('.chart-container');
+    const chartContainer = this.getChartContainerElement();
 
     if (chartContainer) {
       // Remove main tooltip
@@ -783,60 +1210,89 @@ class ChartJSCustomCard extends HTMLElement {
 
   handleChartClick(dataIndex) {
     const usageData = this.chart.data.datasets[0].data;
-    const tempData = this.chart.data.datasets[1].data;
+    const tempData = this.chart.data.datasets[1] ? this.chart.data.datasets[1].data : [];
 
     const usageValue = usageData[dataIndex];
-    const tempValue = tempData[dataIndex];
+    const tempValue = tempData[dataIndex] || 0;
 
     // Get the actual date from raw data
-    const usageDate = this.chartRawData.usage[dataIndex]?.date;
-    const tempDate = this.chartRawData.temp[dataIndex]?.date;
-    const date = usageDate || tempDate || new Date().toISOString();
+    let date;
+    if (this.currentPeriod === 'hourly') {
+      // For hourly data, create a date representing the hour
+      date = new Date().toISOString(); // Use current date with the selected hour
+    } else {
+      const usageDate = this.chartRawData.usage[dataIndex]?.date;
+      const tempDate = this.chartRawData.temp[dataIndex]?.date;
+      date = usageDate || tempDate || new Date().toISOString();
+    }
 
     // Update the info area instead of showing popup
-    this.updateInfoDisplay(date, usageValue, tempValue);
+    this.updateInfoDisplay(date, usageValue, tempValue, dataIndex);
   }
 
-  updateInfoDisplay(date, usage, temperature) {
-    const dataInfo = this.shadowRoot.querySelector('.data-info');
+  updateInfoDisplay(date, usage, temperature, dataIndex) {
+    const dataInfo = this.getDataInfoElement();
     if (!dataInfo) return;
 
     // Store the selected date
     this.selectedDate = date;
 
+        // Handle hourly data differently
+    if (this.currentPeriod === 'hourly') {
+      const hour = dataIndex;
+      this.selectedHour = hour; // Track selected hour
+
+      const hourDisplay = this.formatHourDisplay(hour);
+
+      const rawUsageEntry = this.chartRawData.usage[dataIndex];
+      const actualCost = rawUsageEntry && rawUsageEntry.cost ? rawUsageEntry.cost : 0;
+
+                        // Update the navigation date for hourly with proper format (short for nav)
+      if (!this.currentHourlyDate) {
+        return; // Don't update if date is not set yet
+      }
+
+      const navDateText = this.formatDate(this.currentHourlyDate);
+
+      // Full date format for chart info (same as daily)
+      const fullDateText = this.formatDate(this.currentHourlyDate, {
+        weekday: 'long',
+        month: 'long'
+      });
+
+      const navDate = this.getNavDateElement();
+      if (navDate) {
+        navDate.innerHTML = `${navDateText}<br/>${hourDisplay}`;
+      }
+
+      // Update the display for hourly
+      dataInfo.innerHTML = this.generateUsageDetailsHTML(fullDateText, hourDisplay, actualCost, usage, true);
+      return;
+    }
+
+    // Daily/Monthly data handling (existing logic)
     // Format the date for the top line (same format as getLatestDateDescription)
     const dateObj = new Date(date);
-    const selectedDate = dateObj.toLocaleDateString("en-NZ", {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    });
+    const selectedDate = this.formatDate(dateObj);
 
     // Format the date nicely for the detailed view
-    const formattedDate = dateObj.toLocaleDateString("en-NZ", {
+    const formattedDate = this.formatDate(dateObj, {
       weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric'
+      month: 'long'
     });
 
-    // Calculate estimated cost (assuming $0.25 per kWh - you can adjust this)
-    const costPerKwh = this.config.cost_per_kwh || 0.25;
-    const estimatedCost = usage * costPerKwh;
+            // Use actual cost data from Mercury API (not estimated)
+        const rawUsageEntry = this.chartRawData.usage[dataIndex];
+        const actualCost = rawUsageEntry && rawUsageEntry.cost ? rawUsageEntry.cost : 0;
 
     // Update the navigation date
-    const navDate = this.shadowRoot.querySelector('#navDate');
+    const navDate = this.getNavDateElement();
     if (navDate) {
       navDate.textContent = selectedDate;
     }
 
     // Update the display to show selected date at top and details below
-    dataInfo.innerHTML = `
-      <div class="usage-details">
-        <div class="usage-date">Your usage on ${formattedDate}</div>
-        <div class="usage-stats">$${estimatedCost.toFixed(2)} | ${usage.toFixed(2)} kWh</div>
-      </div>
-    `;
+    dataInfo.innerHTML = this.generateUsageDetailsHTML(formattedDate, null, actualCost, usage, false);
   }
 
   resetInfoDisplay() {
@@ -844,76 +1300,42 @@ class ChartJSCustomCard extends HTMLElement {
     this.selectedDate = null;
 
     // Update the navigation date
-    const navDate = this.shadowRoot.querySelector('#navDate');
-    if (navDate) {
-      navDate.textContent = this.getCurrentDateDescription();
-    }
+    this.updateNavigationDate();
 
-    const dataInfo = this.shadowRoot.querySelector('.data-info');
+    const dataInfo = this.getDataInfoElement();
     if (dataInfo) {
       dataInfo.innerHTML = `${this.getLatestDateDescription()}`;
     }
   }
 
-  exportData() {
-    // Export current page data as CSV
-    if (!this._hass || !this.config.entity) return;
-
-    const entity = this._hass.states[this.config.entity];
-    const rawUsageData = entity.attributes.daily_usage_history || [];
-    const rawTempData = entity.attributes.recent_temperatures || [];
-
-    // Create CSV content
-    let csvContent = "Date,Usage (kWh),Temperature (°C),Estimated Cost\n";
-
-    // Smart pagination logic for CSV export (same as chart data)
-    const sortedUsageData = rawUsageData.sort((a, b) => new Date(b.date) - new Date(a.date));
-    const sortedTempData = rawTempData.sort((a, b) => new Date(b.date) - new Date(a.date));
-
-        let startIndex = this.currentPage * this.itemsPerPage;
-    let endIndex = (this.currentPage + 1) * this.itemsPerPage;
-
-    // If we're on page 1, check if we should show all data instead of just overflow
-    if (this.currentPage === 1) {
-      const remainingItems = sortedUsageData.length - this.itemsPerPage;
-      // If there are fewer than a full page of remaining items, show ALL data from beginning
-      if (remainingItems > 0 && remainingItems < this.itemsPerPage) {
-        startIndex = remainingItems; // Start from the overflow amount to show different dates
-        endIndex = sortedUsageData.length; // Show to the end
-      }
-    }
-
-    const sortedUsage = sortedUsageData
-      .slice(startIndex, endIndex)
-      .sort((a, b) => new Date(a.date) - new Date(b.date));
-
-    const sortedTemp = sortedTempData
-      .slice(startIndex, endIndex)
-      .sort((a, b) => new Date(a.date) - new Date(b.date));
-
-    const costPerKwh = this.config.cost_per_kwh || 0.25;
-
-    sortedUsage.forEach((usage, index) => {
-      const temp = sortedTemp[index];
-      const cost = (Number(usage.consumption) * costPerKwh).toFixed(2);
-      csvContent += `${usage.date},${usage.consumption},${temp?.temperature || 'N/A'},$${cost}\n`;
-    });
-
-    // Download CSV
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `energy-data-page-${this.currentPage + 1}.csv`;
-    a.click();
-    window.URL.revokeObjectURL(url);
-  }
-
   hasPreviousPageData() {
-    if (!this._hass || !this.config.entity) return false;
-
-    const entity = this._hass.states[this.config.entity];
+    const entity = this.getEntity();
     if (!entity) return false;
+
+    // For hourly view, check if there's data for the previous day
+    if (this.currentPeriod === 'hourly') {
+      if (!this.currentHourlyDate) {
+        return false; // No navigation until date is set
+      }
+
+      const rawHourlyData = entity.attributes.hourly_usage_history || [];
+      if (rawHourlyData.length === 0) {
+        return false; // No hourly data available
+      }
+
+      // Get the previous day
+      const previousDay = new Date(this.currentHourlyDate);
+      previousDay.setDate(previousDay.getDate() - 1);
+      const previousDayStr = previousDay.toDateString();
+
+      // Check if there's any data for the previous day
+      const hasDataForPreviousDay = rawHourlyData.some(item => {
+        const itemDate = new Date(item.datetime || item.date);
+        return itemDate.toDateString() === previousDayStr;
+      });
+
+      return hasDataForPreviousDay;
+    }
 
     const rawUsageData = entity.attributes.daily_usage_history || [];
     // Check if there's more data beyond the current page (older data)
@@ -922,15 +1344,54 @@ class ChartJSCustomCard extends HTMLElement {
   }
 
   hasNextPageData() {
+    // For hourly view, check if we can go to next day and if there's data available
+    if (this.currentPeriod === 'hourly') {
+            if (!this.currentHourlyDate) {
+        return false; // No navigation until date is set
+      }
+
+      const entity = this.getEntity();
+      if (!entity) return false;
+
+      const tomorrow = new Date(this.currentHourlyDate);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const today = new Date();
+
+      // Reset time to start of day for accurate comparison
+      tomorrow.setHours(0, 0, 0, 0);
+      today.setHours(0, 0, 0, 0);
+
+      // First check if tomorrow is not beyond today
+      if (tomorrow > today) {
+        return false; // Cannot go beyond today
+      }
+
+      // Then check if there's actual data for tomorrow
+      const rawHourlyData = entity.attributes.hourly_usage_history || [];
+      if (rawHourlyData.length === 0) {
+        return false; // No hourly data available
+      }
+
+      const tomorrowStr = tomorrow.toDateString();
+
+      // Check if there's any data for tomorrow
+      const hasDataForTomorrow = rawHourlyData.some(item => {
+        const itemDate = new Date(item.datetime || item.date);
+        return itemDate.toDateString() === tomorrowStr;
+      });
+
+      return hasDataForTomorrow;
+    }
+
     // Next means newer data, only available if we're not on page 0
     return this.currentPage > 0;
   }
 
   updateNavigation() {
-    const navContainer = this.shadowRoot.querySelector('.navigation');
+    const navContainer = this.getNavigationElement();
     if (navContainer && this.config.show_navigation) {
       navContainer.innerHTML = this.getNavigationHTML();
-      this.attachEventListeners(); // Re-attach event listeners to new elements
+      this.attachNavigationEventListeners(); // Re-attach only navigation event listeners
     }
   }
 
@@ -939,15 +1400,21 @@ class ChartJSCustomCard extends HTMLElement {
     const hasPrevData = this.hasPreviousPageData();
     // Always get fresh date for current page, clear any selected date first
     this.selectedDate = null;
-    const dateText = this.getCurrentDateDescription();
+        const dateText = this.getCurrentDateDescription();
 
     return `
       <div class="nav-info">
-        <span class="nav-date-container">
-          ${hasPrevData ? `<span class="nav-arrow" id="prevBtn">&lt;</span> ` : ''}
-          <span id="navDate">${dateText}</span>
-          ${hasNextData ? ` <span class="nav-arrow" id="nextBtn">&gt;</span>` : ''}
-        </span>
+        <div class="nav-date-container">
+          <div class="nav-column nav-column-left">
+            ${hasPrevData ? `<span class="nav-arrow" id="prevBtn">&lt;</span>` : ''}
+          </div>
+          <div class="nav-column nav-column-center">
+            <span id="navDate">${dateText.replace(/\n/g, '<br/>')}</span>
+          </div>
+          <div class="nav-column nav-column-right">
+            ${hasNextData ? `<span class="nav-arrow" id="nextBtn">&gt;</span>` : ''}
+          </div>
+        </div>
       </div>
     `;
   }
@@ -966,9 +1433,7 @@ class ChartJSCustomCard extends HTMLElement {
   }
 
   getLatestDateDescription() {
-    if (!this._hass || !this.config.entity) return 'No data available';
-
-    const entity = this._hass.states[this.config.entity];
+    const entity = this.getEntity();
     if (!entity) return 'No data available';
 
     const rawUsageData = entity.attributes.daily_usage_history || [];
@@ -997,24 +1462,32 @@ class ChartJSCustomCard extends HTMLElement {
 
     // Get the most recent date from the current page (first item since sorted newest first)
     const latestDate = new Date(sortedUsage[0].date);
-    const formattedDate = latestDate.toLocaleDateString("en-NZ", {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    });
+    const formattedDate = this.formatDate(latestDate);
 
     return formattedDate;
   }
 
-  getCurrentDateDescription() {
+    getCurrentDateDescription() {
+    // Handle hourly view differently
+    if (this.currentPeriod === 'hourly') {
+      if (!this.currentHourlyDate) {
+        return 'Loading...'; // Show loading while date is being determined
+      }
+
+      const dateText = this.formatDate(this.currentHourlyDate);
+
+      if (this.selectedHour !== null) {
+        const hourDisplay = this.formatHourDisplay(this.selectedHour);
+        return `${dateText}\n${hourDisplay}`;
+      }
+
+      return dateText;
+    }
+
     // Return selected date if available, otherwise return latest date
     if (this.selectedDate) {
       const dateObj = new Date(this.selectedDate);
-      return dateObj.toLocaleDateString("en-NZ", {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric'
-      });
+      return this.formatDate(dateObj);
     }
     return this.getLatestDateDescription();
   }
@@ -1024,54 +1497,131 @@ class ChartJSCustomCard extends HTMLElement {
     return `${this.currentPage * this.itemsPerPage} days ago`;
   }
 
-  attachEventListeners() {
+  attachNavigationEventListeners() {
     const prevBtn = this.shadowRoot.getElementById('prevBtn');
     const nextBtn = this.shadowRoot.getElementById('nextBtn');
 
     if (prevBtn) {
             prevBtn.addEventListener('click', () => {
-        console.log('🔙 PREV CLICKED - before:', this.currentPage);
         this.hideCustomTooltip(); // Hide tooltip when navigating
-        this.currentPage++;
-        this.selectedDate = null; // Clear selected date when changing pages
-        console.log('🔙 PREV CLICKED - after:', this.currentPage);
+
+        if (this.currentPeriod === 'hourly') {
+          // For hourly view, go to previous day
+          if (this.currentHourlyDate) {
+            this.currentHourlyDate.setDate(this.currentHourlyDate.getDate() - 1);
+            this.selectedHour = null; // Clear selected hour
+            this.log(`HOURLY PREV CLICKED - date: ${this.currentHourlyDate.toDateString()}`, 'nav');
+
+            // For hourly view, we need to recreate the chart to filter data for the new date
+            const entity = this.getEntity();
+            this.createChart(entity);
+
+            return; // Skip the general updateChartData call below
+          }
+        } else {
+          // For daily/monthly view, use page navigation
+          console.log('🔙 PREV CLICKED - before:', this.currentPage);
+          this.currentPage++;
+          this.selectedDate = null; // Clear selected date when changing pages
+          console.log('🔙 PREV CLICKED - after:', this.currentPage);
+        }
 
         // Get the entity and update chart data
-        const entity = this._hass.states[this.config.entity];
-        console.log('🔙 Entity check:', !!entity, entity?.attributes?.daily_usage_history?.length);
+        const entity = this.getEntity();
         this.updateChartData(entity);
-        console.log('🔙 updateChartData called');
       });
     }
 
     if (nextBtn) {
       nextBtn.addEventListener('click', () => {
-        if (this.currentPage > 0) {
+        this.hideCustomTooltip(); // Hide tooltip when navigating
 
-          this.hideCustomTooltip(); // Hide tooltip when navigating
-          this.currentPage--;
-          this.selectedDate = null; // Clear selected date when changing pages
+        if (this.currentPeriod === 'hourly') {
+          // For hourly view, go to next day (but not beyond today)
+          if (this.currentHourlyDate) {
+            const tomorrow = new Date(this.currentHourlyDate);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            const today = new Date();
 
+            // Reset time to start of day for accurate comparison (same as hasNextPageData)
+            tomorrow.setHours(0, 0, 0, 0);
+            today.setHours(0, 0, 0, 0);
 
-          // Get the entity and update chart data
-          const entity = this._hass.states[this.config.entity];
-          this.updateChartData(entity);
+            if (tomorrow <= today) {
+              this.currentHourlyDate = tomorrow;
+              this.selectedHour = null; // Clear selected hour
+              this.log(`HOURLY NEXT CLICKED - date: ${this.currentHourlyDate.toDateString()}`, 'next');
+
+              // For hourly view, we need to recreate the chart to filter data for the new date
+              const entity = this.getEntity();
+              this.createChart(entity);
+            }
+          }
+        } else {
+          // For daily/monthly view, use page navigation
+          if (this.currentPage > 0) {
+            this.currentPage--;
+            this.selectedDate = null; // Clear selected date when changing pages
+
+            // Get the entity and update chart data
+            const entity = this.getEntity();
+            this.updateChartData(entity);
+          }
         }
       });
     }
+  }
 
-    // Add event listeners for time period buttons
+  attachPeriodEventListeners() {
+
+    // Add event listeners for time period buttons (called only once)
     const periodButtons = this.shadowRoot.querySelectorAll('.period-btn');
     periodButtons.forEach(button => {
       button.addEventListener('click', () => {
+        // Hide tooltip when switching periods
+        this.hideCustomTooltip();
+
         // Remove active class from all buttons
         periodButtons.forEach(btn => btn.classList.remove('active'));
         // Add active class to clicked button
         button.classList.add('active');
 
-        const period = button.dataset.period;
-        console.log(`Selected period: ${period}`);
-        // TODO: Implement period switching logic here
+                const period = button.dataset.period;
+        this.log(`Selected period: ${period}`);
+
+        // Update current period and reset related states
+        const previousPeriod = this.currentPeriod;
+        this.currentPeriod = period;
+
+        // Reset states when switching periods
+        if (period === 'hourly' && previousPeriod !== 'hourly') {
+          // When switching to hourly, reset to latest available date (will be set in createChart)
+          this.currentHourlyDate = null; // Will be set based on available data
+          this.selectedHour = null;
+          this.currentPage = 0; // Reset page navigation
+          this.selectedDate = null;
+        } else if (period !== 'hourly' && previousPeriod === 'hourly') {
+          // When switching away from hourly, reset page navigation and hourly state
+          this.currentPage = 0;
+          this.selectedDate = null;
+          this.selectedHour = null;
+          this.currentHourlyDate = null; // Clear hourly date to prevent state leakage
+        } else if (period !== previousPeriod) {
+          // When switching between daily/monthly, reset navigation state
+          this.currentPage = 0;
+          this.selectedDate = null;
+        }
+
+        // Update legend to show/hide temperature based on current period
+        this.updateCustomLegend();
+
+        // Update navigation to recalculate button visibility for new period
+        this.updateNavigation();
+
+        const entity = this.getEntity();
+        if (entity) {
+          this.createChart(entity);
+        }
       });
     });
   }
@@ -1216,7 +1766,6 @@ class ChartJSCustomCard extends HTMLElement {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 16px;
         }
 
         .card-header h3 {
@@ -1232,44 +1781,41 @@ class ChartJSCustomCard extends HTMLElement {
           justify-content: center;
           align-items: center;
           margin-bottom: 16px;
-          background: #e8f4f8;
-          border-radius: 20px;
-          padding: 4px;
-          max-width: 300px;
-          margin-left: auto;
-          margin-right: auto;
+          background: var(--card-background-color, #f0f0f0);
+          border: 1px solid var(--divider-color);
+          border-radius: 12px;
+          width: 100%;
         }
 
         .period-btn {
           flex: 1;
           background: transparent;
           border: none;
-          padding: 8px 16px;
-          border-radius: 16px;
+          padding: 10px 16px;
+          border-radius: 8px;
           font-weight: 600;
-          font-size: 12px;
+          font-size: 13px;
           cursor: pointer;
           transition: all 0.2s ease;
-          color: var(--secondary-text-color);
+          color: var(--primary-text-color);
           text-transform: uppercase;
         }
 
         .period-btn.active {
-          background: #FFF000;
+          background: ${this.CHART_COLORS.PRIMARY_YELLOW};
           color: #000;
           box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
 
         .period-btn:hover:not(.active) {
-          background: rgba(255, 255, 255, 0.5);
+          background: var(--primary-color);
+          color: white;
         }
 
         .navigation {
           display: flex;
           justify-content: center;
           align-items: center;
-          padding: 12px 0;
-          border-bottom: 1px solid var(--divider-color);
           margin-bottom: 16px;
         }
 
@@ -1297,6 +1843,36 @@ class ChartJSCustomCard extends HTMLElement {
           color: var(--primary-text-color);
         }
 
+        #navDate {
+          text-align: center;
+          line-height: 1.3;
+          display: block;
+        }
+
+        .nav-date-container {
+          display: grid;
+          grid-template-columns: 1fr 1fr 1fr;
+          align-items: center;
+          width: 100%;
+        }
+
+        .nav-column {
+          display: flex;
+          align-items: center;
+        }
+
+        .nav-column-left {
+          justify-content: flex-start;
+        }
+
+        .nav-column-center {
+          justify-content: center;
+        }
+
+        .nav-column-right {
+          justify-content: flex-end;
+        }
+
         .nav-arrow {
           cursor: pointer;
           color: var(--primary-color);
@@ -1315,44 +1891,79 @@ class ChartJSCustomCard extends HTMLElement {
 
         .chart-container {
           height: 400px;
-          margin: 20px 0;
           background: var(--card-background-color, white);
           border-radius: 4px;
           padding: 10px;
           position: relative;  /* Enable relative positioning for tooltips */
         }
 
+        .custom-legend {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 24px;
+          margin: 16px 0;
+        }
+
+        .legend-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 16px;
+        }
+
+        .legend-circle {
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          background-color: ${this.CHART_COLORS.PRIMARY_YELLOW};
+          border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .legend-line {
+          width: 24px;
+          height: 2px;
+          background: ${this.CHART_COLORS.TEMPERATURE_BLUE};
+          border: 1px solid rgba(0, 0, 0, 0.1);
+          border-radius: 1px;
+        }
+
+        .legend-label {
+          font-size: 12px;
+          color: var(--primary-text-color);
+          font-weight: 500;
+        }
+
         .chart-info {
-          text-align: center;
+          text-align: left;
           margin-top: 12px;
-          padding-top: 12px;
-          border-top: 1px solid var(--divider-color);
+          padding: 12px;
+          background: ${this.CHART_COLORS.PRIMARY_YELLOW};
+          border-radius: 8px;
+          border: 1px solid var(--divider-color);
           min-height: 48px;
           display: flex;
           align-items: center;
-          justify-content: center;
-        }
-
-        .data-info {
-          font-size: 12px;
-          color: var(--secondary-text-color);
+          justify-content: flex-start;
         }
 
         .usage-details {
-          text-align: center;
+          text-align: left;
+        }
+
+        .data-info {
+          font-size: 14px;
+          color: black;
         }
 
         .usage-date {
           font-size: 14px;
-          font-weight: 500;
-          color: var(--primary-text-color);
-          margin-bottom: 4px;
+          color: black;
         }
 
         .usage-stats {
-          font-size: 16px;
-          font-weight: 600;
-          color: var(--primary-color);
+          font-size: 14px;
+          color: black;
         }
       </style>
     `;
@@ -1364,12 +1975,20 @@ class ChartJSCustomCard extends HTMLElement {
 
   // Add method to preserve chart state during reconnection
   preserveChartState() {
-    if (this.chart && this.chart.data) {
+    if (this.chart && this.chart.data && this.chart.data.datasets && this.chart.data.datasets[0]) {
       this.lastKnownData = {
         labels: [...this.chart.data.labels],
         usage: [...this.chart.data.datasets[0].data],
-        temperature: [...this.chart.data.datasets[1].data]
+        temperature: this.chart.data.datasets[1] ? [...this.chart.data.datasets[1].data] : []
       };
+    }
+  }
+
+  // Restore chart when card reconnects to DOM (e.g., navigating back to dashboard)
+  connectedCallback() {
+    // Force re-render when component reconnects and chart is missing
+    if (this._hass && this.config && !this.chart) {
+      this.render();
     }
   }
 
@@ -1403,7 +2022,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c  MERCURY-ENERGY-CHART-CARD  \n%c  Version 1.0.0       ',
+  '%c MERCURY-ENERGY-CHART-CARD %c v1.0.0 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );

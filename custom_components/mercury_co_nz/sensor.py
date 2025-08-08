@@ -200,6 +200,8 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             # Also add metadata
             attributes["monthly_data_points"] = len(monthly_history)
 
+
+
         # Add bill statement details for all sensors (if available)
         if "bill_statement_details" in self.coordinator.data:
             attributes["bill_statement_details"] = self.coordinator.data["bill_statement_details"]
