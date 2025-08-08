@@ -18,33 +18,10 @@ except ImportError as e:
     _LOGGER.info("💡 Using fallback implementation")
     PYMERCURY_AVAILABLE = False
 
-    # Fallback dummy class
+    # pymercury not available - integration will fail gracefully
     class MercuryClient:
         def __init__(self, email, password):
-            self.email = email
-            self.password = password
-            self.is_logged_in = False
-            self.customer_id = None
-            self.account_ids = []
-
-        def login(self):
-            # Return dummy tokens
-            return {"access_token": "dummy", "refresh_token": "dummy"}
-
-        def get_complete_account_data(self):
-            # Return dummy account data
-            class DummyAccount:
-                def __init__(self):
-                    self.customer_id = "7334151"
-                    self.account_ids = ["834816299"]
-                    self.services = [DummyService()]
-
-            class DummyService:
-                def __init__(self):
-                    self.is_electricity = True
-                    self.service_id = "12345"
-
-            return DummyAccount()
+            raise ImportError("pymercury library is required but not available")
 
 
 class MercuryAPI:
@@ -346,51 +323,13 @@ class MercuryAPI:
                     return billing_data
 
             _LOGGER.warning("⚠️ No billing data found through manual methods")
-            _LOGGER.error("🚨 NO SAMPLE DATA FALLBACK - Returning empty data to see real API response")
             return {}
 
         except Exception as exc:
             _LOGGER.error("❌ Error in manual bill summary call: %s", exc, exc_info=True)
             return {}
 
-    def _get_sample_bill_data(self, account_id: str) -> dict[str, Any]:
-        """Get sample bill data for testing (remove in production)."""
-        from datetime import datetime, timedelta
 
-        # Sample data based on the JSON structure you provided
-        sample_bill = {
-            "accountId": account_id or "834816299",
-            "balance": "0",
-            "dueAmount": "0",
-            "billDate": "2025-07-07T00:00:00Z",
-            "dueDate": "2025-07-25T00:00:00Z",
-            "overdueAmount": "0",
-            "paymentType": "DirectDebit",
-            "paymentMethod": "BankAccount",
-            "billUrl": f"https://apis.mercury.co.nz/selfservice/v1/customers/7334151/accounts/{account_id}/transactions/bill-pdf/5070678004",
-            "balanceStatus": "Debit",
-            "statement": {
-                "details": [
-                    {
-                        "amount": "44.95",
-                        "lineItem": "Electricity"
-                    },
-                    {
-                        "amount": "91.08",
-                        "lineItem": "Gas"
-                    },
-                    {
-                        "amount": "153.6",
-                        "lineItem": "Broadband"
-                    }
-                ],
-                "total": "289.63"
-            },
-            "smoothPay": None
-        }
-
-        _LOGGER.info("📄 Using sample bill data - replace with real API call when available")
-        return sample_bill
 
     async def get_usage_data(self, _retry_count: int = 0) -> dict[str, Any]:
         """Get comprehensive usage data from Mercury Energy using ElectricityUsage."""
@@ -412,7 +351,7 @@ class MercuryAPI:
 
             if not complete_data:
                 _LOGGER.error("❌ No account data available")
-                return self._get_fallback_data()
+                return {}
 
             # Extract required IDs
             customer_id = complete_data.customer_id
@@ -427,7 +366,7 @@ class MercuryAPI:
 
             if not electricity_service:
                 _LOGGER.error("❌ No electricity service found")
-                return self._get_fallback_data()
+                return {}
 
             service_id = electricity_service.service_id
             _LOGGER.info("🔍 Using IDs: customer_id=%s, account_id=%s, service_id=%s",
@@ -444,7 +383,7 @@ class MercuryAPI:
 
             if not electricity_usage:
                 _LOGGER.error("❌ No electricity usage data returned")
-                return self._get_fallback_data()
+                return {}
 
             _LOGGER.info("✅ Received ElectricityUsage: %s data points, %.2f kWh total",
                         electricity_usage.data_points, electricity_usage.total_usage)
@@ -471,6 +410,7 @@ class MercuryAPI:
 
                 if hourly_usage:
                     normalized_data["hourly_usage"] = round(hourly_usage.total_usage, 2)
+                    # Keep reasonable amount of hourly data to avoid overwhelming the system
                     normalized_data["hourly_usage_history"] = hourly_usage.daily_usage[-48:]  # Last 48 hours
                     _LOGGER.info("✅ Hourly usage: %.2f kWh (%d data points)",
                                 hourly_usage.total_usage, hourly_usage.data_points)
@@ -483,9 +423,9 @@ class MercuryAPI:
                 normalized_data["hourly_usage"] = 0
                 normalized_data["hourly_usage_history"] = []
 
-            # Get monthly usage data
+            # Get monthly usage data for extended historical data
             try:
-                _LOGGER.info("📊 Getting monthly electricity usage...")
+                _LOGGER.info("📊 Getting monthly electricity usage for extended history...")
                 monthly_usage = await loop.run_in_executor(
                     None,
                     self._client._api_client.get_electricity_usage_monthly,
@@ -494,9 +434,19 @@ class MercuryAPI:
 
                 if monthly_usage:
                     normalized_data["monthly_usage"] = round(monthly_usage.total_usage, 2)
+                    # Include ALL available monthly data for extended history
                     normalized_data["monthly_usage_history"] = monthly_usage.daily_usage  # All available months
-                    _LOGGER.info("✅ Monthly usage: %.2f kWh (%d data points)",
-                                monthly_usage.total_usage, monthly_usage.data_points)
+
+                    # If monthly data has more daily entries than our daily data, use it to extend history
+                    if (monthly_usage.daily_usage and
+                        len(monthly_usage.daily_usage) > len(normalized_data["daily_usage_history"])):
+                        _LOGGER.info("📅 Monthly API provided more historical data (%d vs %d days), using monthly data for extended history",
+                                   len(monthly_usage.daily_usage), len(normalized_data["daily_usage_history"]))
+                        normalized_data["daily_usage_history"] = monthly_usage.daily_usage
+
+                    _LOGGER.info("✅ Monthly usage: %.2f kWh (%d data points, %d daily history entries)",
+                                monthly_usage.total_usage, monthly_usage.data_points,
+                                len(monthly_usage.daily_usage) if monthly_usage.daily_usage else 0)
                 else:
                     normalized_data["monthly_usage"] = 0
                     normalized_data["monthly_usage_history"] = []
@@ -530,10 +480,10 @@ class MercuryAPI:
                     return await self.get_usage_data(_retry_count + 1)
                 else:
                     _LOGGER.error("❌ Re-authentication failed")
-                    return self._get_fallback_data()
+                    return {}
             else:
                 _LOGGER.error("❌ Error fetching electricity usage data: %s", exc, exc_info=True)
-                return self._get_fallback_data()
+                return {}
 
     def _process_electricity_usage(self, usage: Any) -> dict[str, Any]:
         """Process ElectricityUsage object into normalized sensor data."""
@@ -568,8 +518,10 @@ class MercuryAPI:
                 normalized_data["current_temperature"] = 0
 
             # Store detailed data for graph cards (keep all available days up to 14)
-            normalized_data["daily_usage_history"] = usage.daily_usage[-14:] if usage.daily_usage else []  # Up to 14 days
-            normalized_data["temperature_history"] = usage.temperature_data[-14:] if usage.temperature_data else []  # Up to 14 days
+            # Include ALL available daily usage data (not just last 14 days)
+            normalized_data["daily_usage_history"] = usage.daily_usage if usage.daily_usage else []
+            # Include ALL available temperature data (not just last 14 days)
+            normalized_data["temperature_history"] = usage.temperature_data if usage.temperature_data else []
 
             _LOGGER.debug("Processed ElectricityUsage: %s kWh total, %s days",
                          usage.total_usage, usage.data_points)
@@ -579,26 +531,7 @@ class MercuryAPI:
 
         return normalized_data
 
-    def _get_fallback_data(self) -> dict[str, Any]:
-        """Return fallback data when API calls fail."""
-        from datetime import datetime
-        return {
-            "total_usage": 0,
-            "average_daily_usage": 0,
-            "current_bill": 0,
-            "latest_daily_usage": 0,
-            "latest_daily_cost": 0,
-            "average_temperature": 0,
-            "current_temperature": 0,
-            "hourly_usage": 0,
-            "monthly_usage": 0,
-            "customer_id": "unknown",
-            "daily_usage_history": [],
-            "temperature_history": [],
-            "hourly_usage_history": [],
-            "monthly_usage_history": [],
-            "last_updated": datetime.now().isoformat()
-        }
+
 
     def _process_usage_response(self, usage_data: Any, normalized_data: dict) -> None:
         """Process usage data response from pymercury."""
@@ -678,84 +611,15 @@ class MercuryAPI:
                         if 'id' in customer:
                             normalized_data["customer_id"] = customer['id']
 
-                    # Look for any numeric data that might be usage or billing
-                    self._extract_fallback_data(complete_data, normalized_data)
+                    # No fallback data extraction - use only real API data
 
         except Exception as e:
             _LOGGER.error("Error processing complete account data: %s", e, exc_info=True)
-            self._use_sample_data(normalized_data)
+            # No sample data - let sensors show unavailable if API fails
 
-    def _extract_fallback_data(self, data: dict, normalized_data: dict):
-        """Extract fallback data from any structure."""
-        _LOGGER.info("🔍 Extracting fallback data from: %s", str(data)[:200] + "...")
 
-        # Set some default values to prevent sensors from being unavailable
-        normalized_data.update({
-            "total_usage": 0,
-            "average_daily_usage": 0,
-            "current_bill": 0,
-            "latest_daily_usage": 0,
-            "latest_daily_cost": 0,
-            "average_temperature": 0,
-            "current_temperature": 0,
-            "customer_id": "unknown"
-        })
 
-        _LOGGER.info("📊 Set fallback data to prevent unavailable sensors")
 
-    def _use_sample_data(self, normalized_data: dict) -> None:
-        """Use sample data based on the real Mercury Energy API structure."""
-        _LOGGER.info("Using sample Mercury Energy data for demonstration")
-
-        # Sample data based on your actual API response
-        sample_daily_data = [
-            {"date": "2025-07-18T00:00:00+12:00", "consumption": 13.69, "cost": 5.98},
-            {"date": "2025-07-19T00:00:00+12:00", "consumption": 11.28, "cost": 5.37},
-            {"date": "2025-07-20T00:00:00+12:00", "consumption": 14.71, "cost": 6.24},
-            {"date": "2025-07-21T00:00:00+12:00", "consumption": 13.82, "cost": 6.01},
-            {"date": "2025-07-22T00:00:00+12:00", "consumption": 15.51, "cost": 6.45},
-            {"date": "2025-07-23T00:00:00+12:00", "consumption": 14.06, "cost": 6.08},
-            {"date": "2025-07-24T00:00:00+12:00", "consumption": 13.77, "cost": 6.0},
-            {"date": "2025-07-25T00:00:00+12:00", "consumption": 11.91, "cost": 5.53},
-            {"date": "2025-07-26T00:00:00+12:00", "consumption": 12.35, "cost": 5.64},
-            {"date": "2025-07-27T00:00:00+12:00", "consumption": 12.97, "cost": 5.8},
-            {"date": "2025-07-28T00:00:00+12:00", "consumption": 11.6, "cost": 5.45},
-            {"date": "2025-07-29T00:00:00+12:00", "consumption": 18.76, "cost": 7.28},
-        ]
-
-        sample_temp_data = [
-            {"date": "2025-07-18T00:00:00+12:00", "temp": 10},
-            {"date": "2025-07-19T00:00:00+12:00", "temp": 10},
-            {"date": "2025-07-20T00:00:00+12:00", "temp": 11},
-            {"date": "2025-07-21T00:00:00+12:00", "temp": 10},
-            {"date": "2025-07-22T00:00:00+12:00", "temp": 11},
-            {"date": "2025-07-23T00:00:00+12:00", "temp": 9},
-            {"date": "2025-07-24T00:00:00+12:00", "temp": 9},
-            {"date": "2025-07-25T00:00:00+12:00", "temp": 10},
-            {"date": "2025-07-26T00:00:00+12:00", "temp": 10},
-            {"date": "2025-07-27T00:00:00+12:00", "temp": 12},
-            {"date": "2025-07-28T00:00:00+12:00", "temp": 13},
-            {"date": "2025-07-29T00:00:00+12:00", "temp": 13},
-        ]
-
-        # Calculate values from sample data
-        total_consumption = sum(day["consumption"] for day in sample_daily_data)
-        total_cost = sum(day["cost"] for day in sample_daily_data)
-        average_daily_consumption = total_consumption / len(sample_daily_data)
-        latest_day = sample_daily_data[-1]
-        avg_temp = sum(day["temp"] for day in sample_temp_data) / len(sample_temp_data)
-        latest_temp = sample_temp_data[-1]["temp"]
-
-        # Set the data
-        normalized_data["total_usage"] = round(total_consumption, 2)
-        normalized_data["average_daily_usage"] = round(average_daily_consumption, 2)
-        normalized_data["current_bill"] = round(total_cost, 2)
-        normalized_data["latest_daily_usage"] = latest_day["consumption"]
-        normalized_data["latest_daily_cost"] = latest_day["cost"]
-        normalized_data["average_temperature"] = round(avg_temp, 1)
-        normalized_data["current_temperature"] = latest_temp
-        normalized_data["daily_usage_history"] = sample_daily_data
-        normalized_data["temperature_history"] = sample_temp_data
 
     async def close(self) -> None:
         """Close the API client."""

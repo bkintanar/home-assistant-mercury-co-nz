@@ -9,8 +9,12 @@ class ChartJSCustomCard extends HTMLElement {
     this.itemsPerPage = 12;
     this.chart = null;
     this.chartLoaded = false;
+    this.chartLoadPromise = null;
+    this.loadRetryCount = 0;
+    this.maxLoadRetries = 3;
     this.stickyTooltip = false;
     this.selectedDate = null; // Track the currently selected date
+    this.isRendering = false;
   }
 
   async setConfig(config) {
@@ -33,36 +37,140 @@ class ChartJSCustomCard extends HTMLElement {
 
     this.itemsPerPage = this.config.items_per_page;
 
-    // Load Chart.js if not already loaded
-    if (!this.chartLoaded) {
-      await this.loadChartJS();
-    }
-
-    this.render();
+    // Load Chart.js if not already loaded and start rendering
+    this.ensureChartJSAndRender();
   }
 
   async loadChartJS() {
     // Check if Chart.js is already loaded
     if (window.Chart) {
       this.chartLoaded = true;
-      return;
+      return Promise.resolve();
     }
 
-    // Load Chart.js from CDN
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.js';
-      script.onload = () => {
-        this.chartLoaded = true;
-        console.log('Chart.js loaded successfully');
-        resolve();
+    // Return existing promise if already loading
+    if (this.chartLoadPromise) {
+      return this.chartLoadPromise;
+    }
+
+    // Load Chart.js from CDN with retry logic
+    this.chartLoadPromise = new Promise((resolve, reject) => {
+      const attemptLoad = (retryCount = 0) => {
+        // Remove any existing failed script tags
+        const existingScripts = document.querySelectorAll('script[src*="chart.umd.js"]');
+        existingScripts.forEach(script => {
+          if (!script.onload) script.remove();
+        });
+
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.js';
+
+        const cleanup = () => {
+          script.onload = null;
+          script.onerror = null;
+        };
+
+        script.onload = () => {
+          cleanup();
+          // Double check Chart.js is actually available
+          if (window.Chart) {
+            this.chartLoaded = true;
+            this.loadRetryCount = 0;
+            console.log('📊 Chart.js loaded successfully');
+            resolve();
+          } else {
+            // Chart.js script loaded but Chart object not available, retry
+            console.warn('📊 Chart.js script loaded but Chart object not available, retrying...');
+            if (retryCount < this.maxLoadRetries) {
+              setTimeout(() => attemptLoad(retryCount + 1), 1000 * (retryCount + 1));
+            } else {
+              reject(new Error('Chart.js loaded but not accessible'));
+            }
+          }
+        };
+
+        script.onerror = () => {
+          cleanup();
+          console.error(`📊 Failed to load Chart.js (attempt ${retryCount + 1})`);
+          if (retryCount < this.maxLoadRetries) {
+            setTimeout(() => attemptLoad(retryCount + 1), 1000 * (retryCount + 1));
+          } else {
+            reject(new Error('Failed to load Chart.js after multiple attempts'));
+          }
+        };
+
+        // Add timeout for loading
+        setTimeout(() => {
+          if (!this.chartLoaded) {
+            cleanup();
+            script.remove();
+            console.error(`📊 Chart.js loading timeout (attempt ${retryCount + 1})`);
+            if (retryCount < this.maxLoadRetries) {
+              setTimeout(() => attemptLoad(retryCount + 1), 1000 * (retryCount + 1));
+            } else {
+              reject(new Error('Chart.js loading timeout'));
+            }
+          }
+        }, 10000); // 10 second timeout
+
+        document.head.appendChild(script);
       };
-      script.onerror = () => {
-        console.error('Failed to load Chart.js');
-        reject(new Error('Failed to load Chart.js'));
-      };
-      document.head.appendChild(script);
+
+      attemptLoad();
     });
+
+    return this.chartLoadPromise;
+  }
+
+  async ensureChartJSAndRender() {
+    if (this.isRendering) return;
+    this.isRendering = true;
+
+    try {
+      // Show loading state immediately
+      this.showLoadingState();
+
+      // Wait for Chart.js to load
+      await this.loadChartJS();
+
+      // Wait a small moment to ensure everything is ready
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Now render
+      this.render();
+    } catch (error) {
+      console.error('📊 Failed to load Chart.js:', error);
+      this.showErrorState(error.message);
+    } finally {
+      this.isRendering = false;
+    }
+  }
+
+  showLoadingState() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `
+      <ha-card>
+        <div style="padding: 20px; text-align: center;">
+          <div style="margin-bottom: 10px;">📊 Loading Chart...</div>
+          <div style="font-size: 0.8em; opacity: 0.7;">Please wait while dependencies load</div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  showErrorState(message) {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `
+      <ha-card>
+        <div style="padding: 20px; text-align: center; color: #ff6b6b;">
+          <div style="margin-bottom: 10px;">⚠️ Chart Load Error</div>
+          <div style="font-size: 0.8em; margin-bottom: 10px;">${message}</div>
+          <button onclick="location.reload()" style="background: #ff6b6b; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">
+            Refresh Page
+          </button>
+        </div>
+      </ha-card>
+    `;
   }
 
   set hass(hass) {
@@ -78,6 +186,16 @@ class ChartJSCustomCard extends HTMLElement {
     const oldEntity = oldHass.states[this.config.entity];
     const newEntity = hass.states[this.config.entity];
 
+    // Handle entity availability changes
+    const wasUnavailable = !oldEntity || oldEntity.state === 'unavailable' || oldEntity.state === 'unknown';
+    const isNowAvailable = newEntity && newEntity.state !== 'unavailable' && newEntity.state !== 'unknown';
+
+    // If entity became available after being unavailable, do a full render to restore chart
+    if (wasUnavailable && isNowAvailable) {
+      this.render();
+      return;
+    }
+
     // Check if entity data actually changed
     if (oldEntity && newEntity &&
         oldEntity.last_changed !== newEntity.last_changed) {
@@ -86,22 +204,45 @@ class ChartJSCustomCard extends HTMLElement {
   }
 
   render() {
-    if (!this.config || !this._hass || !this.chartLoaded) return;
+    if (!this.config || !this._hass) return;
 
-    const entity = this._hass.states[this.config.entity];
-    if (!entity) {
-      this.shadowRoot.innerHTML = `
-        <ha-card>
-          <div style="padding: 16px; color: red;">
-            Entity "${this.config.entity}" not found
-          </div>
-        </ha-card>
-      `;
+    // If Chart.js is not loaded yet, wait for it
+    if (!this.chartLoaded) {
+      if (!this.isRendering) {
+        this.ensureChartJSAndRender();
+      }
       return;
     }
 
-    // Only do full render if DOM doesn't exist yet
-    if (!this.shadowRoot.querySelector('ha-card')) {
+    const entity = this._hass.states[this.config.entity];
+
+    // Handle missing or unavailable entity
+    if (!entity || entity.state === 'unavailable' || entity.state === 'unknown') {
+      // Only show connection message if we don't have existing chart DOM
+      const existingCard = this.shadowRoot.querySelector('ha-card');
+      if (!existingCard) {
+        this.shadowRoot.innerHTML = `
+          <ha-card>
+            <div style="padding: 16px; color: orange; text-align: center;">
+              <div>📡 Connecting to Mercury Energy...</div>
+              <div style="font-size: 0.8em; margin-top: 8px; opacity: 0.7;">
+                ${!entity ? 'Entity not found' : 'Connection temporarily unavailable'}
+              </div>
+            </div>
+          </ha-card>
+        `;
+      } else {
+        // Entity is unavailable but we have existing chart - show status in header
+        this.updateConnectionStatus(false);
+      }
+      return;
+    }
+
+    // Entity is available - clear any connection status
+    this.updateConnectionStatus(true);
+
+    // Only do full render if DOM doesn't exist yet or if chart was destroyed
+    if (!this.shadowRoot.querySelector('ha-card') || !this.chart) {
       this.fullRender(entity);
     } else {
       // Just update the chart data
@@ -136,7 +277,33 @@ class ChartJSCustomCard extends HTMLElement {
     this.createChart(entity);
   }
 
+  updateConnectionStatus(isConnected) {
+    const cardHeader = this.shadowRoot.querySelector('.card-header h3');
+    if (!cardHeader) return;
+
+    // Remove any existing connection status
+    const existingStatus = cardHeader.querySelector('.connection-status');
+    if (existingStatus) {
+      existingStatus.remove();
+    }
+
+    if (!isConnected) {
+      // Add disconnected indicator
+      const statusElement = document.createElement('span');
+      statusElement.className = 'connection-status';
+      statusElement.innerHTML = ' <span style="color: orange; font-size: 0.8em;">📡 Reconnecting...</span>';
+      cardHeader.appendChild(statusElement);
+    }
+  }
+
   updateChartData(entity) {
+    // Ensure Chart.js is loaded before trying to update
+    if (!this.chartLoaded || !window.Chart) {
+      console.log('📊 Chart.js not ready for updateChartData, triggering load...');
+      this.ensureChartJSAndRender();
+      return;
+    }
+
     if (!this.chart) {
       this.createChart(entity);
       return;
@@ -223,9 +390,23 @@ class ChartJSCustomCard extends HTMLElement {
   }
 
   createChart(entity) {
-    // Get data from your mercury energy sensor - matching your ApexCharts setup
-    const rawUsageData = entity.attributes.daily_usage_history || [];
-    const rawTempData = entity.attributes.recent_temperatures || [];
+    // Double-check Chart.js is available
+    if (!window.Chart) {
+      console.error('📊 Chart.js not available in createChart');
+      this.ensureChartJSAndRender();
+      return;
+    }
+
+    try {
+      // Get data from your mercury energy sensor - matching your ApexCharts setup
+      const rawUsageData = entity.attributes.daily_usage_history || [];
+      const rawTempData = entity.attributes.recent_temperatures || [];
+
+      // If no fresh data available but we have cached data, use it
+      if ((!rawUsageData.length || !rawTempData.length) && this.lastKnownData) {
+        console.log('📊 Using cached data during reconnection');
+        // We'll still create the chart but with a loading indicator
+      }
 
     // Process data for current page
     const chartData = this.processChartData(rawUsageData, rawTempData);
@@ -376,6 +557,11 @@ class ChartJSCustomCard extends HTMLElement {
     if (chartData.usage.length > 0) {
       const latestIndex = chartData.usage.length - 1;
       this.handleChartClick(latestIndex);
+    }
+
+    } catch (error) {
+      console.error('📊 Error creating chart:', error);
+      this.showErrorState('Failed to create chart: ' + error.message);
     }
   }
 
@@ -1176,8 +1362,22 @@ class ChartJSCustomCard extends HTMLElement {
     return 5;
   }
 
+  // Add method to preserve chart state during reconnection
+  preserveChartState() {
+    if (this.chart && this.chart.data) {
+      this.lastKnownData = {
+        labels: [...this.chart.data.labels],
+        usage: [...this.chart.data.datasets[0].data],
+        temperature: [...this.chart.data.datasets[1].data]
+      };
+    }
+  }
+
   // Cleanup when card is removed
   disconnectedCallback() {
+    // Preserve state before cleanup
+    this.preserveChartState();
+
     // Hide custom tooltip
     this.hideCustomTooltip();
 

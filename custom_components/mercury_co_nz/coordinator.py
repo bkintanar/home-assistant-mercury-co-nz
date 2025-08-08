@@ -64,17 +64,29 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
 
             _LOGGER.info("Mercury coordinator: Combined data keys: %s", list(combined_data.keys()))
 
-            # 🎯 Store daily data in JSON file for dynamic graphs
+            # Log the amount of fresh data we received
+            daily_data_count = len(combined_data.get('daily_usage_history', []))
+            temp_data_count = len(combined_data.get('temperature_history', []))
+            _LOGGER.info("📊 Fresh API data: %d days usage, %d days temperature", daily_data_count, temp_data_count)
+
+            # 🎯 Store daily data in JSON file for dynamic graphs (this accumulates historical data)
             await self._store_daily_data_json(combined_data)
 
-            # Load extended historical data to expose via sensors
+            # Load extended historical data to expose via sensors (cumulative from JSON file)
             extended_data = await self._load_extended_historical_data()
             if extended_data:
-                # Update the combined data with extended history (more than 14 days)
+                # Update the combined data with extended history (accumulated over time)
                 combined_data.update(extended_data)
-                _LOGGER.info("Enhanced data with %d days of usage history and %d days of temperature history",
-                           len(extended_data.get('extended_daily_usage_history', [])),
-                           len(extended_data.get('extended_temperature_history', [])))
+                extended_usage_count = len(extended_data.get('extended_daily_usage_history', []))
+                extended_temp_count = len(extended_data.get('extended_temperature_history', []))
+                _LOGGER.info("📈 Enhanced with cumulative historical data: %d days usage, %d days temperature",
+                           extended_usage_count, extended_temp_count)
+
+                # Log date range if we have data
+                if extended_data.get('extended_daily_usage_history'):
+                    first_date = extended_data['extended_daily_usage_history'][0].get('date', 'Unknown')
+                    last_date = extended_data['extended_daily_usage_history'][-1].get('date', 'Unknown')
+                    _LOGGER.info("📅 Historical data range: %s to %s", first_date, last_date)
 
             return combined_data
         except Exception as exception:

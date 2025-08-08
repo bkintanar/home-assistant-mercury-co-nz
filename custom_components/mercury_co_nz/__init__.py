@@ -10,6 +10,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 
 from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
 from .coordinator import MercuryDataUpdateCoordinator
@@ -24,11 +25,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     # Register the frontend card when the integration is set up
-    hass.http.register_static_path(
-        f"/api/{DOMAIN}/chartjs-custom-card.js",
-        hass.config.path(f"custom_components/{DOMAIN}/custom-chart-card.js"),
-        True,
-    )
+    await hass.http.async_register_static_paths([
+        StaticPathConfig(
+            f"/api/{DOMAIN}/chartjs-custom-card.js",
+            hass.config.path(f"custom_components/{DOMAIN}/custom-chart-card.js"),
+            True,
+        )
+    ])
 
     # Add the JS file to frontend
     add_extra_js_url(hass, f"/api/{DOMAIN}/chartjs-custom-card.js")
