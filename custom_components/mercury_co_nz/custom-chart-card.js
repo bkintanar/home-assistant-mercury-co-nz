@@ -153,10 +153,16 @@ class ChartJSCustomCard extends HTMLElement {
   // ===== HTML GENERATION HELPERS =====
 
   // Generate usage details HTML for data display
-  generateUsageDetailsHTML(dateText, hourDisplay, cost, usage, isHourly = false) {
-    const usageText = isHourly
-      ? `Your usage at ${hourDisplay} on ${dateText}`
-      : `Your usage on ${dateText}`;
+  generateUsageDetailsHTML(dateText, hourDisplay, cost, usage, isHourly = false, isMonthly = false) {
+    let usageText;
+
+    if (isMonthly) {
+      usageText = 'Your usage this billing period';
+    } else if (isHourly) {
+      usageText = `Your usage at ${hourDisplay} on ${dateText}`;
+    } else {
+      usageText = `Your usage on ${dateText}`;
+    }
 
     return `
       <div class="usage-details">
@@ -1273,17 +1279,26 @@ class ChartJSCustomCard extends HTMLElement {
     // Daily/Monthly data handling (existing logic)
     // Format the date for the top line (same format as getLatestDateDescription)
     const dateObj = new Date(date);
-    const selectedDate = this.formatDate(dateObj);
+    let selectedDate = this.formatDate(dateObj);
+
+    // Use actual cost data from Mercury API (not estimated)
+    const rawUsageEntry = this.chartRawData.usage[dataIndex];
+    const actualCost = rawUsageEntry && rawUsageEntry.cost ? rawUsageEntry.cost : 0;
+
+    // For monthly periods, show billing period range in navigation
+    if (this.currentPeriod === 'monthly' && rawUsageEntry && rawUsageEntry.invoiceFrom && rawUsageEntry.invoiceTo) {
+      const fromDate = new Date(rawUsageEntry.invoiceFrom);
+      const toDate = new Date(rawUsageEntry.invoiceTo);
+      const fromFormatted = this.formatDate(fromDate, { day: 'numeric', month: 'short', year: 'numeric' });
+      const toFormatted = this.formatDate(toDate, { day: 'numeric', month: 'short', year: 'numeric' });
+      selectedDate = `${fromFormatted} - ${toFormatted}`;
+    }
 
     // Format the date nicely for the detailed view
     const formattedDate = this.formatDate(dateObj, {
       weekday: 'long',
       month: 'long'
     });
-
-            // Use actual cost data from Mercury API (not estimated)
-        const rawUsageEntry = this.chartRawData.usage[dataIndex];
-        const actualCost = rawUsageEntry && rawUsageEntry.cost ? rawUsageEntry.cost : 0;
 
     // Update the navigation date
     const navDate = this.getNavDateElement();
@@ -1292,7 +1307,9 @@ class ChartJSCustomCard extends HTMLElement {
     }
 
     // Update the display to show selected date at top and details below
-    dataInfo.innerHTML = this.generateUsageDetailsHTML(formattedDate, null, actualCost, usage, false);
+    // For monthly period, show "billing period" instead of date
+    const isMonthly = this.currentPeriod === 'monthly';
+    dataInfo.innerHTML = this.generateUsageDetailsHTML(formattedDate, null, actualCost, usage, false, isMonthly);
   }
 
   resetInfoDisplay() {
@@ -1337,6 +1354,14 @@ class ChartJSCustomCard extends HTMLElement {
       return hasDataForPreviousDay;
     }
 
+    // For monthly view, check monthly data specifically
+    if (this.currentPeriod === 'monthly') {
+      const rawMonthlyData = entity.attributes.monthly_usage_history || [];
+      const nextPageStartIndex = (this.currentPage + 1) * this.itemsPerPage;
+      return rawMonthlyData.length > nextPageStartIndex;
+    }
+
+    // For daily view, check daily data
     const rawUsageData = entity.attributes.daily_usage_history || [];
     // Check if there's more data beyond the current page (older data)
     const nextPageStartIndex = (this.currentPage + 1) * this.itemsPerPage;
@@ -1383,7 +1408,12 @@ class ChartJSCustomCard extends HTMLElement {
       return hasDataForTomorrow;
     }
 
-    // Next means newer data, only available if we're not on page 0
+    // For monthly view, check if we can go to newer data (page 0 = latest)
+    if (this.currentPeriod === 'monthly') {
+      return this.currentPage > 0;
+    }
+
+    // For daily view, next means newer data, only available if we're not on page 0
     return this.currentPage > 0;
   }
 
@@ -1406,13 +1436,13 @@ class ChartJSCustomCard extends HTMLElement {
       <div class="nav-info">
         <div class="nav-date-container">
           <div class="nav-column nav-column-left">
-            ${hasPrevData ? `<span class="nav-arrow" id="prevBtn">&lt;</span>` : ''}
+            <span class="nav-arrow ${hasPrevData ? '' : 'nav-arrow-hidden'}" id="prevBtn">&lt;</span>
           </div>
           <div class="nav-column nav-column-center">
             <span id="navDate">${dateText.replace(/\n/g, '<br/>')}</span>
           </div>
           <div class="nav-column nav-column-right">
-            ${hasNextData ? `<span class="nav-arrow" id="nextBtn">&gt;</span>` : ''}
+            <span class="nav-arrow ${hasNextData ? '' : 'nav-arrow-hidden'}" id="nextBtn">&gt;</span>
           </div>
         </div>
       </div>
@@ -1436,7 +1466,14 @@ class ChartJSCustomCard extends HTMLElement {
     const entity = this.getEntity();
     if (!entity) return 'No data available';
 
-    const rawUsageData = entity.attributes.daily_usage_history || [];
+    // Use appropriate data source based on current period
+    let rawUsageData;
+    if (this.currentPeriod === 'monthly') {
+      rawUsageData = entity.attributes.monthly_usage_history || [];
+    } else {
+      rawUsageData = entity.attributes.daily_usage_history || [];
+    }
+
     if (rawUsageData.length === 0) return 'No data available';
 
     // Get the data for current page using smart pagination
@@ -1459,6 +1496,18 @@ class ChartJSCustomCard extends HTMLElement {
     const sortedUsage = sortedUsageData.slice(startIndex, endIndex);
 
     if (sortedUsage.length === 0) return 'No data available';
+
+    // For monthly periods, show the billing period date range
+    if (this.currentPeriod === 'monthly') {
+      const latestEntry = sortedUsage[0];
+      if (latestEntry.invoiceFrom && latestEntry.invoiceTo) {
+        const fromDate = new Date(latestEntry.invoiceFrom);
+        const toDate = new Date(latestEntry.invoiceTo);
+        const fromFormatted = this.formatDate(fromDate, { day: 'numeric', month: 'short', year: 'numeric' });
+        const toFormatted = this.formatDate(toDate, { day: 'numeric', month: 'short', year: 'numeric' });
+        return `${fromFormatted} - ${toFormatted}`;
+      }
+    }
 
     // Get the most recent date from the current page (first item since sorted newest first)
     const latestDate = new Date(sortedUsage[0].date);
@@ -1615,12 +1664,11 @@ class ChartJSCustomCard extends HTMLElement {
         // Update legend to show/hide temperature based on current period
         this.updateCustomLegend();
 
-        // Update navigation to recalculate button visibility for new period
-        this.updateNavigation();
-
         const entity = this.getEntity();
         if (entity) {
           this.createChart(entity);
+          // Update navigation after chart is created to ensure latest date for new period
+          this.updateNavigation();
         }
       });
     });
@@ -1847,13 +1895,18 @@ class ChartJSCustomCard extends HTMLElement {
           text-align: center;
           line-height: 1.3;
           display: block;
+          word-break: keep-all;
+          hyphens: none;
+          min-width: 0;
+          padding: 0 4px;
         }
 
         .nav-date-container {
           display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
+          grid-template-columns: auto 1fr auto;
           align-items: center;
           width: 100%;
+          gap: 8px;
         }
 
         .nav-column {
@@ -1887,6 +1940,11 @@ class ChartJSCustomCard extends HTMLElement {
         .nav-arrow:hover {
           background: var(--primary-color);
           color: white;
+        }
+
+        .nav-arrow-hidden {
+          visibility: hidden;
+          pointer-events: none;
         }
 
         .chart-container {
