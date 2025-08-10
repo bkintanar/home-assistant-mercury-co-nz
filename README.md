@@ -2,6 +2,12 @@
 
 A custom Home Assistant integration that provides beautiful, interactive energy usage charts for Mercury Energy New Zealand customers.
 
+## Demo
+
+### Electricity Usage
+
+![Electricity Usage](assets/energy-usage.gif)
+
 ## ✨ Features
 
 ### 📊 Interactive Chart Card
