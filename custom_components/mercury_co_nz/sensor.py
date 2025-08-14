@@ -181,14 +181,25 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             ]
 
         # Add hourly usage history for all sensors (if available)
-        if "hourly_usage_history" in self.coordinator.data:
+        # Use extended hourly data if available (cumulative), fallback to current data
+        if "extended_hourly_usage_history" in self.coordinator.data:
+            hourly_history = self.coordinator.data["extended_hourly_usage_history"]
+            attributes["data_source_hourly"] = "mercury_energy_api_extended"
+            _LOGGER.debug("Using extended hourly usage history: %d hours", len(hourly_history))
+        elif "hourly_usage_history" in self.coordinator.data:
             hourly_history = self.coordinator.data["hourly_usage_history"]
+            attributes["data_source_hourly"] = "mercury_energy_api"
 
+        if "hourly_usage_history" in self.coordinator.data or "extended_hourly_usage_history" in self.coordinator.data:
             # Store the full hourly usage history for graphing
             attributes["hourly_usage_history"] = hourly_history
 
             # Also add metadata
             attributes["hourly_data_points"] = len(hourly_history)
+
+            # Add metadata about historical hourly data
+            if "total_historical_hours" in self.coordinator.data:
+                attributes["total_historical_hours"] = self.coordinator.data["total_historical_hours"]
 
         # Add monthly usage history for all sensors (if available)
         if "monthly_usage_history" in self.coordinator.data:

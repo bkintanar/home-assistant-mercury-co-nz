@@ -33,6 +33,9 @@ class ChartJSCustomCard extends HTMLElement {
     this.currentPeriod = 'daily'; // Track current time period
     this.currentHourlyDate = new Date(); // Track current date for hourly view
     this.selectedHour = null; // Track selected hour in hourly view
+    this.configSet = false; // Track if configuration has been set
+    this.pendingConfig = null; // Store pending configuration during hard refresh
+    this.configRetryTimeout = null; // Timeout for configuration retry
 
     // Color constants
     this.CHART_COLORS = {
@@ -106,6 +109,33 @@ class ChartJSCustomCard extends HTMLElement {
   getEntity() {
     if (!this._hass || !this.config.entity) return null;
     return this._hass.states[this.config.entity];
+  }
+
+  // Helper method to check if entity is available (basic availability check)
+  // This is more permissive to prevent configuration errors during page refresh
+  isEntityAvailable() {
+    const entity = this.getEntity();
+    if (!entity) return false;
+
+    // Check if entity state is valid (not unavailable or unknown)
+    if (entity.state === 'unavailable' || entity.state === 'unknown') return false;
+
+    // Entity is available if it exists and has attributes (data will load progressively)
+    return entity.attributes !== undefined;
+  }
+
+  // More specific method to check if entity has chart data
+  hasChartData() {
+    const entity = this.getEntity();
+    if (!entity || !entity.attributes) return false;
+
+    // Check if entity has any chart data
+    return (
+      entity.attributes.daily_usage_history ||
+      entity.attributes.extended_daily_usage_history ||
+      entity.attributes.hourly_usage_history ||
+      entity.attributes.extended_hourly_usage_history
+    );
   }
 
   // Helper method for updating navigation date display
@@ -208,9 +238,38 @@ class ChartJSCustomCard extends HTMLElement {
   }
 
   async setConfig(config) {
-    if (!config.entity) {
-      throw new Error('You need to define an entity');
+    // More robust validation for hard refresh scenarios
+    if (!config || typeof config !== 'object') {
+      console.warn('Mercury Energy Chart: Invalid config object, waiting for proper configuration...');
+      // Don't throw error immediately - Home Assistant might be initializing
+      this.pendingConfig = config;
+      return;
     }
+
+    if (!config.entity || typeof config.entity !== 'string' || config.entity.trim() === '') {
+      console.warn('Mercury Energy Chart: No entity defined, waiting for proper configuration...');
+      // Store the config and wait for proper entity configuration
+      this.pendingConfig = config;
+
+      // Set up a retry mechanism for hard refresh scenarios
+      if (!this.configRetryTimeout) {
+        this.configRetryTimeout = setTimeout(() => {
+          this.configRetryTimeout = null;
+          if (this.pendingConfig && this.pendingConfig.entity) {
+            console.log('Mercury Energy Chart: Retrying configuration with entity:', this.pendingConfig.entity);
+            this.setConfig(this.pendingConfig);
+          }
+        }, 2000);
+      }
+      return;
+    }
+
+    // Clear any pending retries
+    if (this.configRetryTimeout) {
+      clearTimeout(this.configRetryTimeout);
+      this.configRetryTimeout = null;
+    }
+    this.pendingConfig = null;
 
     this.config = {
       name: 'Chart.js Custom Card',
@@ -222,9 +281,22 @@ class ChartJSCustomCard extends HTMLElement {
     };
 
     this.itemsPerPage = this.config.items_per_page;
+    this.configSet = true; // Mark config as set
 
-    // Load Chart.js if not already loaded and start rendering
-    this.ensureChartJSAndRender();
+    console.log('Mercury Energy Chart: Configuration set successfully with entity:', this.config.entity);
+
+    // Don't immediately render - wait for hass to be available
+    // The render will be triggered by the hass setter when data becomes available
+    if (this._hass && this.isEntityAvailable()) {
+      this.ensureChartJSAndRender();
+    } else if (this._hass) {
+      // If hass is available but entity data isn't ready, retry after a short delay
+      setTimeout(() => {
+        if (this.isEntityAvailable()) {
+          this.ensureChartJSAndRender();
+        }
+      }, 1000);
+    }
   }
 
   async loadChartJS() {
@@ -310,6 +382,13 @@ class ChartJSCustomCard extends HTMLElement {
 
   async ensureChartJSAndRender() {
     if (this.isRendering) return;
+
+    // Double-check entity availability before starting render process
+    if (!this.isEntityAvailable()) {
+      this.showWaitingState();
+      return;
+    }
+
     this.isRendering = true;
 
     try {
@@ -322,8 +401,12 @@ class ChartJSCustomCard extends HTMLElement {
       // Wait a small moment to ensure everything is ready
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Now render
-      this.render();
+      // Final check before rendering
+      if (this.isEntityAvailable()) {
+        this.render();
+      } else {
+        this.showWaitingState();
+      }
     } catch (error) {
       console.error('📊 Failed to load Chart.js:', error);
       this.showErrorState(error.message);
@@ -339,6 +422,42 @@ class ChartJSCustomCard extends HTMLElement {
         <div style="padding: 20px; text-align: center;">
           <div style="margin-bottom: 10px;">📊 Loading Chart...</div>
           <div style="font-size: 0.8em; opacity: 0.7;">Please wait while dependencies load</div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  showWaitingState() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `
+      <ha-card>
+        <div style="padding: 20px; text-align: center;">
+          <div style="margin-bottom: 10px;">⏳ Waiting for Entity...</div>
+          <div style="font-size: 0.8em; opacity: 0.7;">Mercury Energy entity is loading or unavailable</div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  showDataLoadingState() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `
+      <ha-card>
+        <div style="padding: 20px; text-align: center;">
+          <div style="margin-bottom: 10px;">📊 Loading Chart Data...</div>
+          <div style="font-size: 0.8em; opacity: 0.7;">Mercury Energy data is being fetched</div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  showWaitingForConfigState() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `
+      <ha-card>
+        <div style="padding: 20px; text-align: center;">
+          <div style="margin-bottom: 10px;">⚙️ Initializing Card...</div>
+          <div style="font-size: 0.8em; opacity: 0.7;">Setting up Mercury Energy chart configuration</div>
         </div>
       </ha-card>
     `;
@@ -363,9 +482,32 @@ class ChartJSCustomCard extends HTMLElement {
     const oldHass = this._hass;
     this._hass = hass;
 
-    // Only update if entity state actually changed
-    if (!oldHass || !this.config) {
+    // If we have a pending config due to hard refresh, try to apply it now
+    if (!this.config && this.pendingConfig && hass) {
+      console.log('Mercury Energy Chart: Attempting to apply pending configuration with hass available');
+      this.setConfig(this.pendingConfig);
+      return;
+    }
+
+    // If config isn't set yet, don't try to render
+    if (!this.config || !this.configSet) {
+      return;
+    }
+
+    // Initial setup - render when hass becomes available and entity has data
+    if (!oldHass && this.isEntityAvailable()) {
       this.render();
+      return;
+    }
+
+    // If no old hass but entity isn't available yet, set up a retry mechanism
+    if (!oldHass) {
+      // Schedule a retry after entity data loads
+      setTimeout(() => {
+        if (this.isEntityAvailable()) {
+          this.render();
+        }
+      }, 2000);
       return;
     }
 
@@ -377,20 +519,41 @@ class ChartJSCustomCard extends HTMLElement {
     const isNowAvailable = newEntity && newEntity.state !== 'unavailable' && newEntity.state !== 'unknown';
 
     // If entity became available after being unavailable, do a full render to restore chart
-    if (wasUnavailable && isNowAvailable) {
+    if (wasUnavailable && isNowAvailable && this.isEntityAvailable()) {
       this.render();
       return;
     }
 
     // Check if entity data actually changed
     if (oldEntity && newEntity &&
-        oldEntity.last_changed !== newEntity.last_changed) {
+        oldEntity.last_changed !== newEntity.last_changed &&
+        this.hasChartData()) {
       this.updateChartData(newEntity);
     }
   }
 
   render() {
-    if (!this.config || !this._hass) return;
+    if (!this.config || !this._hass || !this.configSet) {
+      // Show a temporary state if we're waiting for configuration during hard refresh
+      if (this.pendingConfig) {
+        this.showWaitingForConfigState();
+      }
+      return;
+    }
+
+    // Check if entity exists and is available
+    if (!this.isEntityAvailable()) {
+      this.showWaitingState();
+      return;
+    }
+
+    const entity = this.getEntity();
+
+    // If entity is available but doesn't have chart data yet, show loading with data info
+    if (!this.hasChartData()) {
+      this.showDataLoadingState();
+      return;
+    }
 
     // If Chart.js is not loaded yet, wait for it
     if (!this.chartLoaded) {
@@ -400,31 +563,7 @@ class ChartJSCustomCard extends HTMLElement {
       return;
     }
 
-    const entity = this.getEntity();
-
-    // Handle missing or unavailable entity
-    if (!entity || entity.state === 'unavailable' || entity.state === 'unknown') {
-      // Only show connection message if we don't have existing chart DOM
-      const existingCard = this.shadowRoot.querySelector('ha-card');
-      if (!existingCard) {
-        this.shadowRoot.innerHTML = `
-          <ha-card>
-            <div style="padding: 16px; color: orange; text-align: center;">
-              <div>📡 Connecting to Mercury Energy...</div>
-              <div style="font-size: 0.8em; margin-top: 8px; opacity: 0.7;">
-                ${!entity ? 'Entity not found' : 'Connection temporarily unavailable'}
-              </div>
-            </div>
-          </ha-card>
-        `;
-      } else {
-        // Entity is unavailable but we have existing chart - show status in header
-        this.updateConnectionStatus(false);
-      }
-      return;
-    }
-
-    // Entity is available - clear any connection status
+    // Entity is available with data - clear any connection status
     this.updateConnectionStatus(true);
 
     // More robust chart existence check - detect all scenarios requiring full render
@@ -2045,13 +2184,19 @@ class ChartJSCustomCard extends HTMLElement {
   // Restore chart when card reconnects to DOM (e.g., navigating back to dashboard)
   connectedCallback() {
     // Force re-render when component reconnects and chart is missing
-    if (this._hass && this.config && !this.chart) {
+    if (this._hass && this.config && this.configSet && !this.chart && this.isEntityAvailable()) {
       this.render();
     }
   }
 
   // Cleanup when card is removed
   disconnectedCallback() {
+    // Clear any pending configuration retries
+    if (this.configRetryTimeout) {
+      clearTimeout(this.configRetryTimeout);
+      this.configRetryTimeout = null;
+    }
+
     // Preserve state before cleanup
     this.preserveChartState();
 
@@ -2066,21 +2211,32 @@ class ChartJSCustomCard extends HTMLElement {
   }
 }
 
-// Register the card
-customElements.define('mercury-energy-chart-card', ChartJSCustomCard);
+// Register the card (prevent re-registration during hard refresh)
+if (!customElements.get('mercury-energy-chart-card')) {
+  customElements.define('mercury-energy-chart-card', ChartJSCustomCard);
+  console.log('Mercury Energy Chart Card: Custom element registered successfully');
+} else {
+  console.log('Mercury Energy Chart Card: Custom element already registered');
+}
 
 // Add to Home Assistant's custom card registry
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'mercury-energy-chart-card',
-  name: 'Mercury Energy Chart Card',
-  description: 'Professional energy usage charts for Mercury Energy NZ',
-  preview: false,
-  documentationURL: 'https://github.com/bkintanar/home-assistant-mercury-co-nz'
-});
+
+// Prevent duplicate entries in customCards array
+const existingCard = window.customCards.find(card => card.type === 'mercury-energy-chart-card');
+if (!existingCard) {
+  window.customCards.push({
+    type: 'mercury-energy-chart-card',
+    name: 'Mercury Energy Chart Card',
+    description: 'Professional energy usage charts for Mercury Energy NZ',
+    preview: false,
+    documentationURL: 'https://github.com/bkintanar/home-assistant-mercury-co-nz'
+  });
+  console.log('Mercury Energy Chart Card: Added to Home Assistant custom cards registry');
+}
 
 console.info(
-  '%c MERCURY-ENERGY-CHART-CARD %c v1.0.0 ',
+  '%c MERCURY-ENERGY-CHART-CARD %c v1.1.0 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );

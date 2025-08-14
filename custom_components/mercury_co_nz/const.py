@@ -69,7 +69,7 @@ SENSOR_TYPES = {
         "state_class": None,
     },
     "hourly_usage": {
-        "name": "Hourly Usage (48 hours)",
+        "name": "Hourly Usage (7 days)",
         "unit": "kWh",
         "icon": "mdi:clock-outline",
         "device_class": "energy",
