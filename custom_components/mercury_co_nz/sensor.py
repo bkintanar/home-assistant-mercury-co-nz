@@ -68,7 +68,7 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
         """Return device information."""
         return {
             "identifiers": {(DOMAIN, self._email)},
-            "name": f"Mercury Energy - {self._email}",
+            "name": f"Mercury NZ - {self._email}",
             "manufacturer": "Mercury Energy",
             "model": "Energy Monitor",
         }

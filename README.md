@@ -79,7 +79,7 @@ Add this to your Home Assistant dashboard:
 
 ```yaml
 type: custom:mercury-energy-chart-card
-entity: sensor.mercury_energy_average_daily_usage
+entity: sensor.mercury_nz_energy_usage
 name: ⚡️ ELECTRICITY USAGE
 show_navigation: true
 ```
@@ -117,7 +117,7 @@ docker restart homeassistant
 
 ```yaml
 type: custom:mercury-energy-chart-card
-entity: sensor.mercury_energy_average_daily_usage
+entity: sensor.mercury_nz_energy_usage
 name: Daily Usage
 ```
 
@@ -125,7 +125,7 @@ name: Daily Usage
 
 ```yaml
 type: custom:mercury-energy-chart-card
-entity: sensor.mercury_energy_average_daily_usage
+entity: sensor.mercury_nz_energy_usage
 name: ⚡️ ELECTRICITY USAGE
 show_navigation: true
 ```

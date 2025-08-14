@@ -523,7 +523,7 @@ class MercuryAPI:
         try:
             # Basic usage statistics
             normalized_data["total_usage"] = round(usage.total_usage, constants.DECIMAL_PLACES)
-            normalized_data["average_daily_usage"] = round(usage.average_daily_usage, constants.DECIMAL_PLACES)
+            normalized_data["energy_usage"] = round(usage.average_daily_usage, constants.DECIMAL_PLACES)
             normalized_data["current_bill"] = round(usage.total_cost, constants.DECIMAL_PLACES)
 
             # Get latest day's data
@@ -581,7 +581,7 @@ class MercuryAPI:
 
                     # Set normalized data
                     normalized_data["total_usage"] = round(total_consumption, 2)
-                    normalized_data["average_daily_usage"] = round(average_daily_consumption, 2)
+                    normalized_data["energy_usage"] = round(average_daily_consumption, 2)
                     normalized_data["current_bill"] = round(total_cost, 2)
                     normalized_data["latest_daily_usage"] = latest_day.get('consumption', 0)
                     normalized_data["latest_daily_cost"] = latest_day.get('cost', 0)

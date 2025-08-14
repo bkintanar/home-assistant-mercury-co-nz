@@ -8,7 +8,7 @@ CONF_PASSWORD = "password"
 
 # Default values
 DEFAULT_SCAN_INTERVAL = 5  # minutes
-DEFAULT_NAME = "Mercury Energy"
+DEFAULT_NAME = "Mercury NZ"
 
 # Sensor types
 SENSOR_TYPES = {
@@ -19,8 +19,8 @@ SENSOR_TYPES = {
         "device_class": "energy",
         "state_class": "total_increasing",
     },
-    "average_daily_usage": {
-        "name": "Average Daily Usage",
+    "energy_usage": {
+        "name": "Energy Usage",
         "unit": "kWh",
         "icon": "mdi:flash",
         "device_class": "energy",
