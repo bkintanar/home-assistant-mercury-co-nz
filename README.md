@@ -86,12 +86,13 @@ show_navigation: true
 
 ### Configuration Options
 
-| Option            | Type    | Default        | Description                      |
-| ----------------- | ------- | -------------- | -------------------------------- |
-| `entity`          | string  | **required**   | The Mercury Energy sensor entity |
-| `name`            | string  | "Energy Usage" | Card title                       |
-| `show_navigation` | boolean | `false`        | Show previous/next navigation    |
-| `items_per_page`  | number  | `12`           | Days to show per page            |
+| Option            | Type    | Default                  | Description                           |
+| ----------------- | ------- | ------------------------ | ------------------------------------- |
+| `entity`          | string  | **required**             | The Mercury Energy sensor entity      |
+| `name`            | string  | "Energy Usage"           | Card title                            |
+| `show_navigation` | boolean | `false`                  | Show previous/next navigation         |
+| `items_per_page`  | number  | `12`                     | Days to show per page                 |
+| `period`          | string  | `hourly\|daily\|monthly` | Time periods to show (pipe-separated) |
 
 ## 📋 Requirements
 
@@ -127,6 +128,38 @@ name: Daily Usage
 type: custom:mercury-energy-chart-card
 entity: sensor.mercury_nz_energy_usage
 name: ⚡️ ELECTRICITY USAGE
+show_navigation: true
+```
+
+### Period Filtering Examples
+
+Show only daily and monthly views:
+
+```yaml
+type: custom:mercury-energy-chart-card
+entity: sensor.mercury_nz_energy_usage
+name: ⚡️ ELECTRICITY USAGE
+period: daily|monthly
+show_navigation: true
+```
+
+Show only hourly view:
+
+```yaml
+type: custom:mercury-energy-chart-card
+entity: sensor.mercury_nz_energy_usage
+name: ⚡️ HOURLY USAGE
+period: hourly
+show_navigation: true
+```
+
+Show all periods (default):
+
+```yaml
+type: custom:mercury-energy-chart-card
+entity: sensor.mercury_nz_energy_usage
+name: ⚡️ ELECTRICITY USAGE
+period: hourly|daily|monthly
 show_navigation: true
 ```
 

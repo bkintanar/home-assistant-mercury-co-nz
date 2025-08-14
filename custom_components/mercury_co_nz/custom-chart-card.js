@@ -276,9 +276,28 @@ class ChartJSCustomCard extends HTMLElement {
       chart_type: 'bar', // bar, line, area, mixed
       show_navigation: true,
       items_per_page: 12,
+      period: 'hourly|daily|monthly', // Default: show all periods
       // No default cost rate needed - using actual Mercury Energy costs
       ...config
     };
+
+    // Parse allowed periods from config
+    this.allowedPeriods = this.config.period
+      .split('|')
+      .map(p => p.trim().toLowerCase())
+      .filter(p => ['hourly', 'daily', 'monthly'].includes(p));
+
+    // If no valid periods specified, default to all
+    if (this.allowedPeriods.length === 0) {
+      this.allowedPeriods = ['hourly', 'daily', 'monthly'];
+    }
+
+    // Set default period to first allowed period
+    if (this.allowedPeriods.includes('daily')) {
+      this.currentPeriod = 'daily';
+    } else {
+      this.currentPeriod = this.allowedPeriods[0];
+    }
 
     this.itemsPerPage = this.config.items_per_page;
     this.configSet = true; // Mark config as set
@@ -1589,11 +1608,21 @@ class ChartJSCustomCard extends HTMLElement {
   }
 
   renderNavigation() {
+    // Generate period buttons based on allowed periods
+    const periodLabels = {
+      'hourly': 'HOURLY',
+      'daily': 'DAILY',
+      'monthly': 'MONTHLY'
+    };
+
+    const periodButtons = this.allowedPeriods.map(period => {
+      const isActive = period === this.currentPeriod ? 'active' : '';
+      return `<button class="period-btn ${isActive}" data-period="${period}">${periodLabels[period]}</button>`;
+    }).join('');
+
     return `
       <div class="time-period-selector">
-        <button class="period-btn" data-period="hourly">HOURLY</button>
-        <button class="period-btn active" data-period="daily">DAILY</button>
-        <button class="period-btn" data-period="monthly">MONTHLY</button>
+        ${periodButtons}
       </div>
       <div class="navigation">
         ${this.getNavigationHTML()}
