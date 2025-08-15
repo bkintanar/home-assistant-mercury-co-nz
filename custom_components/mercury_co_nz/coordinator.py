@@ -46,7 +46,7 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
         """Update data via library."""
         _LOGGER.info("Mercury coordinator: Starting data update")
         try:
-            # Fetch both usage data and bill summary data
+            # Fetch usage data, bill summary data, and monthly summary data
             _LOGGER.info("📊 Fetching usage data...")
             usage_data = await self.api.get_usage_data()
             _LOGGER.info("Mercury coordinator: Received usage data")
@@ -55,14 +55,33 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             bill_data = await self.api.get_bill_summary()
             _LOGGER.info("Mercury coordinator: Received bill data")
 
-            # Combine both datasets
+            _LOGGER.info("📅 Fetching monthly summary data...")
+            monthly_summary_data = await self.api.get_monthly_summary()
+            _LOGGER.info("Mercury coordinator: Received monthly summary data")
+
+            _LOGGER.info("📄 Fetching usage content data...")
+            usage_content_data = await self.api.get_usage_content()
+            _LOGGER.info("Mercury coordinator: Received usage content data")
+
+            # Combine all datasets
             combined_data = usage_data.copy() if usage_data else {}
             if bill_data:
                 # Add bill data with prefix to avoid naming conflicts
                 for key, value in bill_data.items():
                     combined_data[f"bill_{key}"] = value
 
+            if monthly_summary_data:
+                # Add monthly summary data with prefix to avoid naming conflicts
+                for key, value in monthly_summary_data.items():
+                    combined_data[f"monthly_{key}"] = value
+
+            if usage_content_data:
+                # Add usage content data with prefix to avoid naming conflicts
+                for key, value in usage_content_data.items():
+                    combined_data[f"content_{key}"] = value
+
             _LOGGER.info("Mercury coordinator: Combined data keys: %s", list(combined_data.keys()))
+            _LOGGER.debug("Mercury coordinator: Sample data values: %s", {k: v for k, v in list(combined_data.items())[:5]})
 
             # Log the amount of fresh data we received
             daily_data_count = len(combined_data.get('daily_usage_history', []))

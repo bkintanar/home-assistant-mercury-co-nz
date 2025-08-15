@@ -7,32 +7,17 @@ from typing import Any
 
 import aiohttp
 
+from .const import DECIMAL_PLACES, TEMP_DECIMAL_PLACES, FALLBACK_ZERO, FALLBACK_EMPTY_LIST
+
 _LOGGER = logging.getLogger(__name__)
-
-# DRY Constants to eliminate magic numbers and repeated strings
-class APIConstants:
-    """Constants for API operations following DRY principles."""
-    DECIMAL_PLACES = 2
-    TEMP_DECIMAL_PLACES = 1
-    FALLBACK_ZERO = 0
-    FALLBACK_EMPTY_LIST = []
-
-    # Consistent logging messages
-    MSG_GETTING_HOURLY = "📊 Getting hourly electricity usage..."
-    MSG_GETTING_MONTHLY = "📊 Getting monthly electricity usage for extended history..."
-    MSG_SUCCESS_HOURLY = "✅ Hourly usage: %.2f kWh (%d data points, %d history entries)"
-    MSG_SUCCESS_MONTHLY = "✅ Monthly usage: %.2f kWh (%d monthly billing periods)"
-    MSG_ERROR_HOURLY = "⚠️ Could not get hourly usage: %s"
-    MSG_ERROR_MONTHLY = "⚠️ Could not get monthly usage: %s"
-    MSG_ERROR_EXTRACTION = "⚠️ Monthly data extraction failed! Falling back to daily_usage as temporary fix. Count: %d"
 
 try:
     from pymercury import MercuryClient
     PYMERCURY_AVAILABLE = True
-    _LOGGER.info("✅ pymercury with MercuryClient available")
+    _LOGGER.info("pymercury with MercuryClient available")
 except ImportError as e:
-    _LOGGER.warning("⚠️ pymercury MercuryClient not available: %s", e)
-    _LOGGER.info("💡 Using fallback implementation")
+    _LOGGER.warning("pymercury MercuryClient not available: %s", e)
+    _LOGGER.info("Using fallback implementation")
     PYMERCURY_AVAILABLE = False
 
     # pymercury not available - integration will fail gracefully
@@ -59,7 +44,7 @@ class MercuryAPI:
             return True
 
         try:
-            _LOGGER.info("🔐 Authenticating with Mercury Energy...")
+            _LOGGER.info("Authenticating with Mercury Energy...")
 
             loop = asyncio.get_event_loop()
 
@@ -78,154 +63,213 @@ class MercuryAPI:
             # Check if login was successful
             if self._client.is_logged_in:
                 self._authenticated = True
-                _LOGGER.info("✅ Successfully authenticated with Mercury Energy")
+                _LOGGER.info("Successfully authenticated with Mercury Energy")
                 _LOGGER.info("Customer ID: %s", getattr(self._client, 'customer_id', 'Unknown'))
                 _LOGGER.info("Account IDs: %s", getattr(self._client, 'account_ids', 'Unknown'))
                 return True
             else:
-                _LOGGER.error("❌ Authentication failed - not logged in")
+                _LOGGER.error("Authentication failed - not logged in")
                 self._authenticated = False
                 return False
 
         except Exception as exc:
-            _LOGGER.error("❌ Authentication failed: %s", exc, exc_info=True)
+            _LOGGER.error("Authentication failed: %s", exc, exc_info=True)
             self._authenticated = False
             return False
 
-    async def get_bill_summary(self, _retry_count: int = 0) -> dict[str, Any]:
-        """Get bill summary data from Mercury Energy."""
-        _LOGGER.error("🚨 GET_BILL_SUMMARY CALLED! retry_count=%d", _retry_count)
-        _LOGGER.debug("Getting bill summary data... (retry count: %d)", _retry_count)
+    async def get_monthly_summary(self, _retry_count: int = 0) -> dict[str, Any]:
+        """Get monthly summary data from Mercury Energy using pymercury."""
+        _LOGGER.debug("Getting monthly summary data... (retry count: %d)", _retry_count)
 
         if not self._authenticated or not self._client:
             _LOGGER.debug("Not authenticated, attempting authentication...")
             success = await self.authenticate()
             if not success:
-                _LOGGER.error("Authentication failed for bill summary, returning empty data")
+                _LOGGER.error("Authentication failed for monthly summary, returning empty data")
                 return {}
 
         try:
             loop = asyncio.get_event_loop()
-            _LOGGER.info("💳 Getting bill summary data...")
+            _LOGGER.info("Getting monthly summary data using pymercury...")
 
             # Get account information first
             complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
 
             if not complete_data:
-                _LOGGER.error("❌ No account data available for bill summary")
+                _LOGGER.error("No account data available for monthly summary")
                 return {}
 
             # Extract required IDs
             customer_id = complete_data.customer_id
             account_id = complete_data.account_ids[0] if complete_data.account_ids else None
 
-            if not customer_id:
-                _LOGGER.error("❌ No customer ID found for bill summary")
+            # Find electricity service
+            electricity_service = None
+            for service in complete_data.services:
+                if service.is_electricity:
+                    electricity_service = service
+                    break
+
+            if not electricity_service:
+                _LOGGER.error("No electricity service found for monthly summary")
                 return {}
 
-            if not account_id:
-                _LOGGER.error("❌ No account ID found for bill summary")
+            service_id = electricity_service.service_id
+
+            if not customer_id or not account_id or not service_id:
+                _LOGGER.error("Missing required IDs for monthly summary")
                 return {}
 
-            # Get bill summary using pymercury internal API client
-            _LOGGER.info("📄 Requesting bill summary for account: %s", account_id)
+            _LOGGER.info("Using pymercury get_electricity_summary for customer:%s, account:%s, service:%s",
+                        customer_id, account_id, service_id)
 
-            # Try using internal API client to get bill summary
-            try:
-                # Use internal _api_client if available
-                if hasattr(self._client, '_api_client') and self._client._api_client:
-                    _LOGGER.debug("🔧 Using _api_client for bill summary")
-                    _LOGGER.debug("🔍 Checking get_bill_summary method signature...")
+            # Use pymercury's built-in get_electricity_summary method
+            # This method automatically handles the asOfDate parameter (defaults to today)
+            electricity_summary = await loop.run_in_executor(
+                None,
+                self._client._api_client.get_electricity_summary,
+                customer_id, account_id, service_id
+            )
 
-                    # Check method signature
-                    import inspect
-                    if hasattr(self._client._api_client, 'get_bill_summary'):
-                        method_sig = inspect.signature(self._client._api_client.get_bill_summary)
-                        _LOGGER.debug("📋 Method signature: %s", method_sig)
-
-                        # Try different ways to call the method
-                        if len(method_sig.parameters) == 0:
-                            # No parameters - call without account_id
-                            _LOGGER.error("🔧 Calling get_bill_summary() without parameters")
-                            bill_summary = await loop.run_in_executor(
-                                None,
-                                lambda: self._client._api_client.get_bill_summary()
-                            )
-                        elif 'account_id' in method_sig.parameters:
-                            # Has account_id parameter - try with both customer_id and account_id
-                            if 'customer_id' in method_sig.parameters:
-                                _LOGGER.error("🔧 Calling get_bill_summary(customer_id='%s', account_id='%s')", customer_id, account_id)
-                                bill_summary = await loop.run_in_executor(
-                                    None,
-                                    lambda: self._client._api_client.get_bill_summary(customer_id=customer_id, account_id=account_id)
-                                )
-                            else:
-                                _LOGGER.error("🔧 Calling get_bill_summary(account_id='%s')", account_id)
-                                bill_summary = await loop.run_in_executor(
-                                    None,
-                                    lambda: self._client._api_client.get_bill_summary(account_id=account_id)
-                                )
-                        else:
-                            # Try positional arguments with both customer_id and account_id
-                            _LOGGER.error("🔧 Calling get_bill_summary('%s', '%s') positionally", customer_id, account_id)
-                            bill_summary = await loop.run_in_executor(
-                                None,
-                                lambda: self._client._api_client.get_bill_summary(customer_id, account_id)
-                            )
-                    else:
-                        raise AttributeError("get_bill_summary method not found")
-
-                elif hasattr(self._client, 'api') and self._client.api:
-                    _LOGGER.error("🔧 Using api client for bill summary")
-                    # Try through the api attribute with both parameters
-                    bill_summary = await loop.run_in_executor(
-                        None,
-                        lambda: self._client.api.get_bill_summary(customer_id, account_id)
-                    )
-                else:
-                    # Fallback: try direct method (if it exists)
-                    _LOGGER.error("🔧 Using direct client method for bill summary")
-                    bill_summary = await loop.run_in_executor(
-                        None,
-                        lambda: self._client.get_bill_summary(customer_id, account_id)
-                    )
-            except AttributeError as attr_err:
-                _LOGGER.warning("⚠️ Bill summary method not available in pymercury: %s", attr_err)
-                _LOGGER.info("💡 Implementing manual bill summary API call...")
-
-                # Manual implementation using Mercury API directly
-                bill_summary = await self._get_bill_summary_manual(account_id)
-            except Exception as api_err:
-                _LOGGER.error("❌ Error calling bill summary API: %s", api_err)
-                raise api_err
-
-            if not bill_summary:
-                _LOGGER.warning("⚠️ No bill summary data returned")
+            if not electricity_summary:
+                _LOGGER.error("No electricity summary data returned")
                 return {}
 
-            _LOGGER.info("✅ Successfully retrieved bill summary")
-            _LOGGER.debug("📋 Raw bill summary data: %s", bill_summary)
-            _LOGGER.debug("📋 Bill summary type: %s", type(bill_summary))
+            _LOGGER.info("Successfully retrieved electricity summary")
+            _LOGGER.debug("Raw summary data: %s", electricity_summary)
 
-            # Normalize the bill summary data
-            normalized_bill = self._normalize_bill_data(bill_summary)
-            _LOGGER.debug("Normalized bill data: %s", normalized_bill)
-            return normalized_bill
+            # Normalize the summary data using pymercury's ElectricitySummary object
+            normalized_summary = self._normalize_electricity_summary_data(electricity_summary)
+            _LOGGER.debug("Normalized summary data: %s", normalized_summary)
+            return normalized_summary
 
         except Exception as exc:
             if ("Tokens expired" in str(exc) or "refresh failed" in str(exc)) and _retry_count == 0:
-                _LOGGER.warning("🔄 Tokens expired during bill summary, attempting re-authentication...")
+                _LOGGER.warning("Tokens expired during monthly summary, attempting re-authentication...")
                 self._authenticated = False
                 success = await self.authenticate()
                 if success:
-                    _LOGGER.info("✅ Re-authentication successful, retrying bill summary...")
-                    return await self.get_bill_summary(_retry_count + 1)
+                    _LOGGER.info("Re-authentication successful, retrying monthly summary...")
+                    return await self.get_monthly_summary(_retry_count + 1)
                 else:
-                    _LOGGER.error("❌ Re-authentication failed for bill summary")
+                    _LOGGER.error("Re-authentication failed for monthly summary")
                     return {}
             else:
-                _LOGGER.error("❌ Error fetching bill summary data: %s", exc, exc_info=True)
+                _LOGGER.error("Error fetching monthly summary data: %s", exc, exc_info=True)
                 return {}
+
+    def _normalize_electricity_summary_data(self, electricity_summary: Any) -> dict[str, Any]:
+        """Normalize electricity summary data from pymercury's ElectricitySummary object."""
+        if not electricity_summary:
+            return {}
+
+        try:
+            # Access the raw data from the ElectricitySummary object
+            if hasattr(electricity_summary, 'raw_data'):
+                summary_dict = electricity_summary.raw_data
+            elif hasattr(electricity_summary, '__dict__'):
+                summary_dict = electricity_summary.__dict__
+            else:
+                summary_dict = electricity_summary
+
+            # Extract monthly summary information from the API response
+            monthly_summary = summary_dict.get("monthlySummary", {})
+
+            normalized = {
+                "billing_start_date": monthly_summary.get("startDate", ""),
+                "billing_end_date": monthly_summary.get("endDate", ""),
+                "billing_status": monthly_summary.get("status", ""),
+                "days_remaining": monthly_summary.get("daysRemaining", 0),
+                "usage_cost": float(monthly_summary.get("usageCost", 0)),
+                "usage_consumption": float(monthly_summary.get("usageConsumption", 0)),
+                "projected_bill_note": monthly_summary.get("note", ""),
+            }
+
+            # Calculate billing period progress
+            if monthly_summary.get("startDate") and monthly_summary.get("endDate"):
+                from datetime import datetime
+                try:
+                    start_date = datetime.fromisoformat(monthly_summary["startDate"].replace('Z', '+00:00'))
+                    end_date = datetime.fromisoformat(monthly_summary["endDate"].replace('Z', '+00:00'))
+                    now = datetime.now(start_date.tzinfo)
+
+                    total_days = (end_date - start_date).days
+                    elapsed_days = (now - start_date).days
+
+                    if total_days > 0:
+                        progress_percent = min(100, max(0, (elapsed_days / total_days) * 100))
+                        normalized["billing_progress_percent"] = round(progress_percent, 1)
+                    else:
+                        normalized["billing_progress_percent"] = 0
+
+                except Exception as date_err:
+                    _LOGGER.warning("Could not calculate billing progress: %s", date_err)
+                    normalized["billing_progress_percent"] = 0
+
+            _LOGGER.info("Normalized electricity summary data: %s", normalized)
+            return normalized
+
+        except Exception as exc:
+            _LOGGER.error("Error normalizing electricity summary data: %s", exc)
+            return {}
+
+    async def get_bill_summary(self, _retry_count: int = 0) -> dict[str, Any]:
+        """Get bill summary data from Mercury Energy."""
+        _LOGGER.debug("Getting bill summary data (retry count: %d)", _retry_count)
+
+        if not self._authenticated or not self._client:
+            success = await self.authenticate()
+            if not success:
+                _LOGGER.error("Authentication failed for bill summary")
+                return {}
+
+        try:
+            loop = asyncio.get_event_loop()
+            _LOGGER.info("Getting bill summary data...")
+
+            # Get account information
+            complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
+            if not complete_data:
+                _LOGGER.error("No account data available")
+                return {}
+
+            customer_id = complete_data.customer_id
+            account_id = complete_data.account_ids[0] if complete_data.account_ids else None
+
+            if not customer_id or not account_id:
+                _LOGGER.error("Missing customer_id or account_id")
+                return {}
+
+            # Try to get bill summary using pymercury
+            try:
+                if hasattr(self._client, '_api_client') and hasattr(self._client._api_client, 'get_bill_summary'):
+                    bill_summary = await loop.run_in_executor(
+                        None,
+                        lambda: self._client._api_client.get_bill_summary(customer_id, account_id)
+                    )
+                else:
+                    _LOGGER.warning("Bill summary method not available in pymercury")
+                    return {}
+            except Exception as api_err:
+                _LOGGER.error("Error calling bill summary API: %s", api_err)
+                return {}
+
+            if not bill_summary:
+                _LOGGER.warning("No bill summary data returned")
+                return {}
+
+            _LOGGER.info("Successfully retrieved bill summary")
+            return self._normalize_bill_data(bill_summary)
+
+        except Exception as exc:
+            if ("Tokens expired" in str(exc) or "refresh failed" in str(exc)) and _retry_count == 0:
+                _LOGGER.warning("Tokens expired, re-authenticating...")
+                self._authenticated = False
+                if await self.authenticate():
+                    return await self.get_bill_summary(_retry_count + 1)
+
+            _LOGGER.error("Error fetching bill summary: %s", exc, exc_info=True)
+            return {}
 
     def _normalize_bill_data(self, bill_data: Any) -> dict[str, Any]:
         """Normalize bill summary data to a consistent format."""
@@ -266,92 +310,17 @@ class MercuryAPI:
             # Store statement details as-is
             normalized["statement_details"] = bill_dict.get("statement_details", [])
 
-            _LOGGER.debug("✅ Normalized bill data: %s", normalized)
+            _LOGGER.debug("Normalized bill data: %s", normalized)
             return normalized
 
         except Exception as exc:
-            _LOGGER.error("❌ Error normalizing bill data: %s", exc)
+            _LOGGER.error("Error normalizing bill data: %s", exc)
             return {}
-
-    async def _get_bill_summary_manual(self, account_id: str) -> dict[str, Any]:
-        """Manually get bill summary using Mercury API endpoint."""
-        try:
-            # Get the authenticated API client
-            if not hasattr(self._client, 'api') or not self._client.api:
-                _LOGGER.error("❌ No authenticated API client available for manual bill call")
-                return {}
-
-            loop = asyncio.get_event_loop()
-
-            # Try to call the bill summary endpoint directly
-            # Mercury API likely has endpoints like /bill-summary or /billing
-            _LOGGER.info("🔗 Attempting manual bill summary API call...")
-
-            # Check if api client has a generic request method
-            api_client = self._client.api
-            if hasattr(api_client, 'get') or hasattr(api_client, 'request'):
-                # Try different possible endpoints
-                possible_endpoints = [
-                    f"/accounts/{account_id}/bill-summary",
-                    f"/accounts/{account_id}/billing",
-                    f"/bill-summary/{account_id}",
-                    f"/billing/{account_id}",
-                    f"/accounts/{account_id}/statement"
-                ]
-
-                for endpoint in possible_endpoints:
-                    try:
-                        _LOGGER.debug(f"🔍 Trying endpoint: {endpoint}")
-
-                        if hasattr(api_client, 'get'):
-                            response = await loop.run_in_executor(None, api_client.get, endpoint)
-                        elif hasattr(api_client, 'request'):
-                            response = await loop.run_in_executor(None, api_client.request, 'GET', endpoint)
-                        else:
-                            continue
-
-                        if response:
-                            _LOGGER.info(f"✅ Found bill data at endpoint: {endpoint}")
-                            return response
-
-                    except Exception as endpoint_err:
-                        _LOGGER.debug(f"❌ Endpoint {endpoint} failed: {endpoint_err}")
-                        continue
-
-            # If direct API calls don't work, try to extract from existing data
-            _LOGGER.info("💡 Trying to extract billing data from complete account data...")
-            complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
-
-            if complete_data:
-                # Check if complete_data has any billing attributes
-                billing_data = {}
-
-                for attr_name in dir(complete_data):
-                    if not attr_name.startswith('_'):
-                        attr_value = getattr(complete_data, attr_name)
-
-                        # Look for billing-related attributes
-                        if any(keyword in attr_name.lower() for keyword in ['bill', 'balance', 'payment', 'due', 'invoice']):
-                            billing_data[attr_name] = attr_value
-                            _LOGGER.info(f"🎯 Found billing attribute: {attr_name} = {attr_value}")
-
-                if billing_data:
-                    _LOGGER.info("✅ Extracted billing data from complete account data")
-                    return billing_data
-
-            _LOGGER.warning("⚠️ No billing data found through manual methods")
-            return {}
-
-        except Exception as exc:
-            _LOGGER.error("❌ Error in manual bill summary call: %s", exc, exc_info=True)
-            return {}
-
 
 
     async def _execute_api_call_with_fallback(self, api_method, customer_id, account_id, service_id,
                                             usage_key, history_key, log_message, success_message, error_message):
-        """DRY helper method to eliminate repeated API call patterns."""
-        constants = APIConstants()
+        """Helper method for API calls with fallback handling."""
         loop = asyncio.get_event_loop()
 
         try:
@@ -363,14 +332,14 @@ class MercuryAPI:
             )
 
             if result:
-                usage_value = round(result.total_usage, constants.DECIMAL_PLACES)
-                history_data = getattr(result, 'daily_usage', constants.FALLBACK_EMPTY_LIST) or constants.FALLBACK_EMPTY_LIST
+                usage_value = round(result.total_usage, DECIMAL_PLACES)
+                history_data = getattr(result, 'daily_usage', FALLBACK_EMPTY_LIST) or FALLBACK_EMPTY_LIST
 
                 # Special handling for monthly data
                 if 'monthly' in history_key:
                     history_data = self._extract_monthly_usage_data(result)
                     if not history_data and hasattr(result, 'daily_usage') and result.daily_usage:
-                        _LOGGER.warning(constants.MSG_ERROR_EXTRACTION, len(result.daily_usage))
+                        _LOGGER.warning("Monthly data extraction failed, using daily data. Count: %d", len(result.daily_usage))
                         history_data = result.daily_usage
 
                 data_points = getattr(result, 'data_points', 0)
@@ -384,16 +353,95 @@ class MercuryAPI:
                 }
             else:
                 return {
-                    usage_key: constants.FALLBACK_ZERO,
-                    history_key: constants.FALLBACK_EMPTY_LIST
+                    usage_key: FALLBACK_ZERO,
+                    history_key: FALLBACK_EMPTY_LIST
                 }
 
         except Exception as e:
             _LOGGER.warning(error_message, e)
             return {
-                usage_key: constants.FALLBACK_ZERO,
-                history_key: constants.FALLBACK_EMPTY_LIST
+                usage_key: FALLBACK_ZERO,
+                history_key: FALLBACK_EMPTY_LIST
             }
+
+    async def get_usage_content(self, _retry_count: int = 0) -> dict[str, Any]:
+        """Get electricity usage content from Mercury Energy including disclaimers."""
+        _LOGGER.debug("Getting usage content... (retry count: %d)", _retry_count)
+
+        if not self._authenticated or not self._client:
+            _LOGGER.debug("Not authenticated, attempting authentication...")
+            success = await self.authenticate()
+            if not success:
+                _LOGGER.error("Authentication failed for usage content, returning empty data")
+                return {}
+
+        try:
+            loop = asyncio.get_event_loop()
+            _LOGGER.info("Getting electricity usage content using pymercury...")
+
+            # Use pymercury's built-in get_electricity_usage_content method
+            usage_content = await loop.run_in_executor(
+                None,
+                self._client._api_client.get_electricity_usage_content
+            )
+
+            if not usage_content:
+                _LOGGER.error("No electricity usage content returned")
+                return {}
+
+            _LOGGER.info("Successfully retrieved electricity usage content")
+            _LOGGER.debug("Raw usage content: %s", usage_content)
+
+            # Normalize the usage content data
+            normalized_content = self._normalize_usage_content_data(usage_content)
+            _LOGGER.debug("Normalized usage content: %s", normalized_content)
+            return normalized_content
+
+        except Exception as exc:
+            if ("Tokens expired" in str(exc) or "refresh failed" in str(exc)) and _retry_count == 0:
+                _LOGGER.warning("Tokens expired during usage content, attempting re-authentication...")
+                self._authenticated = False
+                success = await self.authenticate()
+                if success:
+                    _LOGGER.info("Re-authentication successful, retrying usage content...")
+                    return await self.get_usage_content(_retry_count + 1)
+                else:
+                    _LOGGER.error("❌ Re-authentication failed for usage content")
+                    return {}
+            else:
+                _LOGGER.error("❌ Error fetching usage content: %s", exc, exc_info=True)
+                return {}
+
+    def _normalize_usage_content_data(self, usage_content: Any) -> dict[str, Any]:
+        """Normalize usage content data from pymercury's ElectricityUsageContent object."""
+        if not usage_content:
+            return {}
+
+        try:
+            # Access the raw data from the ElectricityUsageContent object
+            if hasattr(usage_content, 'raw_data'):
+                content_dict = usage_content.raw_data
+            elif hasattr(usage_content, '__dict__'):
+                content_dict = usage_content.__dict__
+            else:
+                content_dict = usage_content
+
+            # Extract disclaimer text from content structure
+            content_data = content_dict.get("content", {})
+            disclaimer_usage_summary = content_data.get("disclaimer_usage_summary", {})
+
+            normalized = {
+                "disclaimer_text": disclaimer_usage_summary.get("text", ""),
+                "monthly_summary_description": content_data.get("monthly_summary_description", {}).get("text", ""),
+                "monthly_summary_info": content_data.get("monthly_summary_info_modal_body", {}).get("text", ""),
+            }
+
+            _LOGGER.debug("✅ Normalized usage content data: %s", normalized)
+            return normalized
+
+        except Exception as exc:
+            _LOGGER.error("❌ Error normalizing usage content data: %s", exc)
+            return {}
 
     async def get_usage_data(self, _retry_count: int = 0) -> dict[str, Any]:
         """Get comprehensive usage data from Mercury Energy using ElectricityUsage."""
@@ -408,7 +456,7 @@ class MercuryAPI:
 
         try:
             loop = asyncio.get_event_loop()
-            _LOGGER.info("📊 Getting electricity usage data...")
+            _LOGGER.info("Getting electricity usage data...")
 
             # Get account information first
             complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
@@ -463,26 +511,25 @@ class MercuryAPI:
                         # Process ElectricityUsage object into normalized data
             normalized_data = self._process_electricity_usage(electricity_usage)
 
-            # Get hourly usage data using DRY helper method
-            constants = APIConstants()
+            # Get hourly usage data
             hourly_result = await self._execute_api_call_with_fallback(
                 self._client._api_client.get_electricity_usage_hourly,
                 customer_id, account_id, service_id,
                 "hourly_usage", "hourly_usage_history",
-                constants.MSG_GETTING_HOURLY,
-                constants.MSG_SUCCESS_HOURLY,
-                constants.MSG_ERROR_HOURLY
+                "Getting hourly electricity usage...",
+                "Hourly usage: %.2f kWh (%d data points, %d history entries)",
+                "Could not get hourly usage: %s"
             )
             normalized_data.update(hourly_result)
 
-            # Get monthly usage data using DRY helper method
+            # Get monthly usage data
             monthly_result = await self._execute_api_call_with_fallback(
                 self._client._api_client.get_electricity_usage_monthly,
                 customer_id, account_id, service_id,
                 "monthly_usage", "monthly_usage_history",
-                constants.MSG_GETTING_MONTHLY,
-                constants.MSG_SUCCESS_MONTHLY,
-                constants.MSG_ERROR_MONTHLY
+                "Getting monthly electricity usage for extended history...",
+                "Monthly usage: %.2f kWh (%d monthly billing periods)",
+                "Could not get monthly usage: %s"
             )
             normalized_data.update(monthly_result)
 
@@ -518,39 +565,38 @@ class MercuryAPI:
     def _process_electricity_usage(self, usage: Any) -> dict[str, Any]:
         """Process ElectricityUsage object into normalized sensor data."""
         normalized_data = {}
-        constants = APIConstants()  # Define constants at method start for DRY principles
 
         try:
             # Basic usage statistics
-            normalized_data["total_usage"] = round(usage.total_usage, constants.DECIMAL_PLACES)
-            normalized_data["energy_usage"] = round(usage.average_daily_usage, constants.DECIMAL_PLACES)
-            normalized_data["current_bill"] = round(usage.total_cost, constants.DECIMAL_PLACES)
+            normalized_data["total_usage"] = round(usage.total_usage, DECIMAL_PLACES)
+            normalized_data["energy_usage"] = round(usage.average_daily_usage, DECIMAL_PLACES)
+            normalized_data["current_bill"] = round(usage.total_cost, DECIMAL_PLACES)
 
             # Get latest day's data
             if usage.daily_usage:
                 latest_day = usage.daily_usage[-1]
-                normalized_data["latest_daily_usage"] = latest_day.get('consumption', constants.FALLBACK_ZERO)
-                normalized_data["latest_daily_cost"] = latest_day.get('cost', constants.FALLBACK_ZERO)
+                normalized_data["latest_daily_usage"] = latest_day.get('consumption', FALLBACK_ZERO)
+                normalized_data["latest_daily_cost"] = latest_day.get('cost', FALLBACK_ZERO)
             else:
-                normalized_data["latest_daily_usage"] = constants.FALLBACK_ZERO
-                normalized_data["latest_daily_cost"] = constants.FALLBACK_ZERO
+                normalized_data["latest_daily_usage"] = FALLBACK_ZERO
+                normalized_data["latest_daily_cost"] = FALLBACK_ZERO
 
-            # Temperature data using constants
+            # Temperature data
             if usage.average_temperature is not None:
-                normalized_data["average_temperature"] = round(usage.average_temperature, constants.TEMP_DECIMAL_PLACES)
+                normalized_data["average_temperature"] = round(usage.average_temperature, TEMP_DECIMAL_PLACES)
             else:
-                normalized_data["average_temperature"] = constants.FALLBACK_ZERO
+                normalized_data["average_temperature"] = FALLBACK_ZERO
 
             # Current temperature (from latest temperature reading)
             if usage.temperature_data:
                 latest_temp = usage.temperature_data[-1]
-                normalized_data["current_temperature"] = latest_temp.get('temp', constants.FALLBACK_ZERO)
+                normalized_data["current_temperature"] = latest_temp.get('temp', FALLBACK_ZERO)
             else:
-                normalized_data["current_temperature"] = constants.FALLBACK_ZERO
+                normalized_data["current_temperature"] = FALLBACK_ZERO
 
-            # Store detailed data for graph cards using constants for fallbacks
-            normalized_data["daily_usage_history"] = usage.daily_usage if usage.daily_usage else constants.FALLBACK_EMPTY_LIST
-            normalized_data["temperature_history"] = usage.temperature_data if usage.temperature_data else constants.FALLBACK_EMPTY_LIST
+            # Store detailed data for graph cards
+            normalized_data["daily_usage_history"] = usage.daily_usage if usage.daily_usage else FALLBACK_EMPTY_LIST
+            normalized_data["temperature_history"] = usage.temperature_data if usage.temperature_data else FALLBACK_EMPTY_LIST
 
             _LOGGER.debug("Processed ElectricityUsage: %s kWh total, %s days",
                          usage.total_usage, usage.data_points)

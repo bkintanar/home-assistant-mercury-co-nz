@@ -24,17 +24,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Mercury Energy NZ from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    # Register the frontend card when the integration is set up
+    # Register the frontend cards when the integration is set up
     await hass.http.async_register_static_paths([
         StaticPathConfig(
             f"/api/{DOMAIN}/chartjs-custom-card.js",
             hass.config.path(f"custom_components/{DOMAIN}/custom-chart-card.js"),
             True,
+        ),
+        StaticPathConfig(
+            f"/api/{DOMAIN}/monthly-summary-card.js",
+            hass.config.path(f"custom_components/{DOMAIN}/monthly-summary-card.js"),
+            True,
         )
     ])
 
-    # Add the JS file to frontend
+    # Add the JS files to frontend
     add_extra_js_url(hass, f"/api/{DOMAIN}/chartjs-custom-card.js")
+    add_extra_js_url(hass, f"/api/{DOMAIN}/monthly-summary-card.js")
 
     coordinator = MercuryDataUpdateCoordinator(
         hass,

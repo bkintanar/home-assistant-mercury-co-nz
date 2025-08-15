@@ -21,6 +21,14 @@ A custom Home Assistant integration that provides beautiful, interactive energy 
   - Tooltip positioning above data points
 - **Period Selection**: Toggle between Hourly, Daily, and Monthly views (Daily default)
 
+### 📅 Monthly Summary Card
+
+- **Billing Period Overview**: Current usage cost and consumption for the billing period
+- **Progress Tracking**: Visual progress bar showing billing period completion
+- **Date Information**: Billing period start/end dates and days remaining
+- **Projected Billing**: Automatically extracts projected bill amounts from Mercury's notes
+- **Responsive Design**: Adapts to different screen sizes and themes
+
 ### 🎨 Visual Features
 
 - **Custom Colors**: Bright yellow (#FFF000) energy bars, custom temperature line
@@ -122,6 +130,14 @@ entity: sensor.mercury_nz_energy_usage
 name: Daily Usage
 ```
 
+> **Note**: For charting, use one of these sensors with full historical data:
+>
+> - `sensor.mercury_nz_energy_usage` (recommended)
+> - `sensor.mercury_nz_total_usage_7_days`
+> - `sensor.mercury_nz_current_bill_7_days`
+>
+> Other sensors (billing info, dates, etc.) have minimal attributes to optimize database performance.
+
 ### Advanced Card with Navigation
 
 ```yaml
@@ -162,6 +178,31 @@ name: ⚡️ ELECTRICITY USAGE
 period: hourly|daily|monthly
 show_navigation: true
 ```
+
+### Monthly Summary Card
+
+```yaml
+type: custom:mercury-monthly-summary-card
+entity: sensor.mercury_nz_current_period_cost
+name: MONTHLY SUMMARY
+show_progress_bar: true
+```
+
+#### Monthly Summary Configuration
+
+| Option              | Type    | Default           | Description                      |
+| ------------------- | ------- | ----------------- | -------------------------------- |
+| `entity`            | string  | **Required**      | Any Mercury NZ sensor entity     |
+| `name`              | string  | "Monthly Summary" | Card title                       |
+| `show_progress_bar` | boolean | true              | Show billing period progress bar |
+
+The monthly summary card displays:
+
+- **Current usage cost and consumption** for the billing period
+- **Billing period dates** (start and end)
+- **Days remaining** in the current billing period
+- **Progress bar** showing how much of the billing period has elapsed
+- **Projected bill amount** extracted from Mercury's billing notes
 
 ## 🛠️ Development
 

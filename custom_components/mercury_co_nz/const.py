@@ -167,4 +167,60 @@ SENSOR_TYPES = {
         "device_class": None,
         "state_class": None,
     },
+    # Monthly Summary Sensors
+    "monthly_billing_start_date": {
+        "name": "Billing Period Start",
+        "unit": None,
+        "icon": "mdi:calendar-start",
+        "device_class": "date",
+        "state_class": None,
+    },
+    "monthly_billing_end_date": {
+        "name": "Billing Period End",
+        "unit": None,
+        "icon": "mdi:calendar-end",
+        "device_class": "date",
+        "state_class": None,
+    },
+    "monthly_days_remaining": {
+        "name": "Days Remaining in Period",
+        "unit": "days",
+        "icon": "mdi:calendar-clock",
+        "device_class": None,
+        "state_class": "measurement",
+    },
+    "monthly_usage_cost": {
+        "name": "Current Period Cost",
+        "unit": "$",
+        "icon": "mdi:currency-usd",
+        "device_class": "monetary",
+        "state_class": "total",
+    },
+    "monthly_usage_consumption": {
+        "name": "Current Period Usage",
+        "unit": "kWh",
+        "icon": "mdi:lightning-bolt",
+        "device_class": "energy",
+        "state_class": "total",
+    },
+    "monthly_billing_progress_percent": {
+        "name": "Billing Period Progress",
+        "unit": "%",
+        "icon": "mdi:progress-clock",
+        "device_class": None,
+        "state_class": "measurement",
+    },
+    "monthly_projected_bill_note": {
+        "name": "Projected Bill Note",
+        "unit": None,
+        "icon": "mdi:note-text",
+        "device_class": None,
+        "state_class": None,
+    },
 }
+
+# API Constants
+DECIMAL_PLACES = 2
+TEMP_DECIMAL_PLACES = 1
+FALLBACK_ZERO = 0
+FALLBACK_EMPTY_LIST = []

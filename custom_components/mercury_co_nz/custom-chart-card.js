@@ -111,17 +111,16 @@ class ChartJSCustomCard extends HTMLElement {
     return this._hass.states[this.config.entity];
   }
 
-  // Helper method to check if entity is available (basic availability check)
-  // This is more permissive to prevent configuration errors during page refresh
+  // Helper method to check if entity is available (very permissive to prevent config errors)
   isEntityAvailable() {
+    if (!this.config || !this.config.entity) return false;
+
     const entity = this.getEntity();
     if (!entity) return false;
 
-    // Check if entity state is valid (not unavailable or unknown)
-    if (entity.state === 'unavailable' || entity.state === 'unknown') return false;
-
-    // Entity is available if it exists and has attributes (data will load progressively)
-    return entity.attributes !== undefined;
+    // Be more permissive - only reject if truly missing, not just temporarily unavailable
+    // This prevents configuration errors during Home Assistant startup/restart
+    return true; // If entity exists at all, consider it "available" for config purposes
   }
 
   // More specific method to check if entity has chart data
@@ -238,20 +237,24 @@ class ChartJSCustomCard extends HTMLElement {
   }
 
   async setConfig(config) {
-    // More robust validation for hard refresh scenarios
-    if (!config || typeof config !== 'object') {
-      console.warn('Mercury Energy Chart: Invalid config object, waiting for proper configuration...');
-      // Don't throw error immediately - Home Assistant might be initializing
-      this.pendingConfig = config;
-      return;
+    // Very permissive validation to prevent configuration errors
+    if (!config) {
+      console.warn('Mercury Energy Chart: No config provided, using defaults...');
+      config = { entity: '' }; // Provide minimal default config
     }
 
-    if (!config.entity || typeof config.entity !== 'string' || config.entity.trim() === '') {
-      console.warn('Mercury Energy Chart: No entity defined, waiting for proper configuration...');
-      // Store the config and wait for proper entity configuration
+    if (typeof config !== 'object') {
+      console.warn('Mercury Energy Chart: Invalid config type, creating default...');
+      config = { entity: config?.entity || '' }; // Try to salvage entity if possible
+    }
+
+    // Don't require entity to be set immediately - Home Assistant might be loading
+    if (!config.entity) {
+      console.log('Mercury Energy Chart: No entity defined yet, will retry when available...');
+      // Store the config but don't fail
       this.pendingConfig = config;
 
-      // Set up a retry mechanism for hard refresh scenarios
+      // Set up a more patient retry mechanism
       if (!this.configRetryTimeout) {
         this.configRetryTimeout = setTimeout(() => {
           this.configRetryTimeout = null;
@@ -259,8 +262,20 @@ class ChartJSCustomCard extends HTMLElement {
             console.log('Mercury Energy Chart: Retrying configuration with entity:', this.pendingConfig.entity);
             this.setConfig(this.pendingConfig);
           }
-        }, 2000);
+        }, 5000); // Wait longer for HA to fully load
       }
+
+      // Set a basic config so the card doesn't show "configuration error"
+      this.config = {
+        name: 'Mercury Energy Chart',
+        entity: '',
+        chart_type: 'bar',
+        show_navigation: true,
+        items_per_page: 12,
+        period: 'daily',
+        ...config
+      };
+      this.configSet = true;
       return;
     }
 
@@ -482,6 +497,23 @@ class ChartJSCustomCard extends HTMLElement {
     `;
   }
 
+  showConfigurationNeededState() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.innerHTML = `
+      <ha-card>
+        <div style="padding: 20px; text-align: center;">
+          <div style="margin-bottom: 10px;">⚙️ Configuration Required</div>
+          <div style="font-size: 0.8em; opacity: 0.7; margin-bottom: 15px;">Please configure an entity for this Mercury Energy chart</div>
+          <div style="font-size: 0.7em; background: var(--secondary-background-color, #f5f5f5); padding: 10px; border-radius: 4px; text-align: left;">
+            <strong>Example configuration:</strong><br/>
+            type: custom:mercury-energy-chart-card<br/>
+            entity: sensor.mercury_nz_energy_usage
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
   showErrorState(message) {
     if (!this.shadowRoot) return;
     this.shadowRoot.innerHTML = `
@@ -557,6 +589,12 @@ class ChartJSCustomCard extends HTMLElement {
       if (this.pendingConfig) {
         this.showWaitingForConfigState();
       }
+      return;
+    }
+
+    // If no entity is configured, show helpful message instead of error
+    if (!this.config.entity) {
+      this.showConfigurationNeededState();
       return;
     }
 
@@ -1727,7 +1765,6 @@ class ChartJSCustomCard extends HTMLElement {
           if (this.currentHourlyDate) {
             this.currentHourlyDate.setDate(this.currentHourlyDate.getDate() - 1);
             this.selectedHour = null; // Clear selected hour
-            this.log(`HOURLY PREV CLICKED - date: ${this.currentHourlyDate.toDateString()}`, 'nav');
 
             // For hourly view, we need to recreate the chart to filter data for the new date
             const entity = this.getEntity();
@@ -1737,10 +1774,8 @@ class ChartJSCustomCard extends HTMLElement {
           }
         } else {
           // For daily/monthly view, use page navigation
-          console.log('🔙 PREV CLICKED - before:', this.currentPage);
           this.currentPage++;
           this.selectedDate = null; // Clear selected date when changing pages
-          console.log('🔙 PREV CLICKED - after:', this.currentPage);
         }
 
         // Get the entity and update chart data
@@ -1767,7 +1802,6 @@ class ChartJSCustomCard extends HTMLElement {
             if (tomorrow <= today) {
               this.currentHourlyDate = tomorrow;
               this.selectedHour = null; // Clear selected hour
-              this.log(`HOURLY NEXT CLICKED - date: ${this.currentHourlyDate.toDateString()}`, 'next');
 
               // For hourly view, we need to recreate the chart to filter data for the new date
               const entity = this.getEntity();
@@ -1803,8 +1837,7 @@ class ChartJSCustomCard extends HTMLElement {
         // Add active class to clicked button
         button.classList.add('active');
 
-                const period = button.dataset.period;
-        this.log(`Selected period: ${period}`);
+        const period = button.dataset.period;
 
         // Update current period and reset related states
         const previousPeriod = this.currentPeriod;
