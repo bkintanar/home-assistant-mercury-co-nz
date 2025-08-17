@@ -50,14 +50,35 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.info("📊 Fetching usage data...")
             usage_data = await self.api.get_usage_data()
             _LOGGER.info("Mercury coordinator: Received usage data")
+            if usage_data:
+                _LOGGER.info("✅ Usage data contains %d keys: %s", len(usage_data), list(usage_data.keys()))
+            else:
+                _LOGGER.error("❌ No usage data received - this is the root cause of sensor None values")
+                _LOGGER.error("❌ Sensors will return 0 instead of actual usage values")
 
             _LOGGER.info("💳 Fetching bill summary data...")
             bill_data = await self.api.get_bill_summary()
             _LOGGER.info("Mercury coordinator: Received bill data")
+            if bill_data:
+                _LOGGER.info("✅ Bill data contains %d keys: %s", len(bill_data), list(bill_data.keys()))
+            else:
+                _LOGGER.warning("⚠️ No bill data received")
 
             _LOGGER.info("📅 Fetching monthly summary data...")
             monthly_summary_data = await self.api.get_monthly_summary()
             _LOGGER.info("Mercury coordinator: Received monthly summary data")
+            if monthly_summary_data:
+                _LOGGER.info("✅ Monthly data contains %d keys: %s", len(monthly_summary_data), list(monthly_summary_data.keys()))
+            else:
+                _LOGGER.warning("⚠️ No monthly summary data received")
+
+            _LOGGER.info("📊 Fetching weekly summary data...")
+            weekly_summary_data = await self.api.get_weekly_summary()
+            _LOGGER.info("Mercury coordinator: Received weekly summary data")
+            if weekly_summary_data:
+                _LOGGER.info("✅ Weekly data contains %d keys: %s", len(weekly_summary_data), list(weekly_summary_data.keys()))
+            else:
+                _LOGGER.warning("⚠️ No weekly summary data received")
 
             _LOGGER.info("📄 Fetching usage content data...")
             usage_content_data = await self.api.get_usage_content()
@@ -74,6 +95,11 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                 # Add monthly summary data with prefix to avoid naming conflicts
                 for key, value in monthly_summary_data.items():
                     combined_data[f"monthly_{key}"] = value
+
+            if weekly_summary_data:
+                # Add weekly summary data with prefix to avoid naming conflicts
+                for key, value in weekly_summary_data.items():
+                    combined_data[f"weekly_{key}"] = value
 
             if usage_content_data:
                 # Add usage content data with prefix to avoid naming conflicts

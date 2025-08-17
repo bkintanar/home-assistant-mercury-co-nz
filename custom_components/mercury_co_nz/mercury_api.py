@@ -77,6 +77,122 @@ class MercuryAPI:
             self._authenticated = False
             return False
 
+    async def get_weekly_summary(self, _retry_count: int = 0) -> dict[str, Any]:
+        """Get weekly summary data from Mercury Energy using pymercury."""
+        _LOGGER.debug("Getting weekly summary data... (retry count: %d)", _retry_count)
+
+        if not self._authenticated or not self._client:
+            _LOGGER.debug("Not authenticated, attempting authentication...")
+            success = await self.authenticate()
+            if not success:
+                _LOGGER.error("Authentication failed for weekly summary, returning empty data")
+                return {}
+
+        try:
+            loop = asyncio.get_event_loop()
+            _LOGGER.info("Getting weekly summary data using pymercury...")
+
+            # Get account information first
+            complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
+
+            if not complete_data:
+                _LOGGER.error("No account data available for weekly summary")
+                return {}
+
+            # Extract required IDs
+            customer_id = complete_data.customer_id
+            account_id = complete_data.account_ids[0] if complete_data.account_ids else None
+
+            # Find electricity service
+            electricity_service = None
+            for service in complete_data.services:
+                if service.is_electricity:
+                    electricity_service = service
+                    break
+
+            if not electricity_service:
+                _LOGGER.error("No electricity service found for weekly summary")
+                return {}
+
+            service_id = electricity_service.service_id
+
+            if not customer_id or not account_id or not service_id:
+                _LOGGER.error("Missing required IDs for weekly summary")
+                return {}
+
+            _LOGGER.info("Using pymercury get_electricity_summary for weekly data: customer:%s, account:%s, service:%s",
+                        customer_id, account_id, service_id)
+
+            # Use pymercury's built-in get_electricity_summary method to get both weekly and monthly
+            electricity_summary = await loop.run_in_executor(
+                None,
+                self._client._api_client.get_electricity_summary,
+                customer_id, account_id, service_id
+            )
+
+            if not electricity_summary:
+                _LOGGER.error("No electricity summary data returned for weekly")
+                return {}
+
+            _LOGGER.info("Successfully retrieved electricity summary for weekly data")
+            _LOGGER.debug("Raw summary data for weekly: %s", electricity_summary)
+
+            # Normalize the weekly summary data using pymercury's ElectricitySummary object
+            normalized_weekly = self._normalize_weekly_summary_data(electricity_summary)
+            _LOGGER.debug("Normalized weekly summary data: %s", normalized_weekly)
+            return normalized_weekly
+
+        except Exception as exc:
+            if ("Tokens expired" in str(exc) or "refresh failed" in str(exc)) and _retry_count == 0:
+                _LOGGER.warning("Tokens expired during weekly summary, attempting re-authentication...")
+                self._authenticated = False
+                success = await self.authenticate()
+                if success:
+                    _LOGGER.info("Re-authentication successful, retrying weekly summary...")
+                    return await self.get_weekly_summary(_retry_count + 1)
+                else:
+                    _LOGGER.error("Re-authentication failed for weekly summary")
+                    return {}
+            else:
+                _LOGGER.error("Error fetching weekly summary data: %s", exc, exc_info=True)
+                return {}
+
+    def _normalize_weekly_summary_data(self, electricity_summary: Any) -> dict[str, Any]:
+        """Normalize weekly summary data from pymercury's ElectricitySummary object."""
+        if not electricity_summary:
+            return {}
+
+        try:
+            # Access the raw data from the ElectricitySummary object
+            if hasattr(electricity_summary, 'raw_data'):
+                summary_dict = electricity_summary.raw_data
+            elif hasattr(electricity_summary, '__dict__'):
+                summary_dict = electricity_summary.__dict__
+            else:
+                summary_dict = electricity_summary
+
+            # Extract weekly summary information from the API response
+            weekly_summary = summary_dict.get("weeklySummary", {})
+
+            if not weekly_summary:
+                _LOGGER.warning("No weekly summary data found in API response")
+                return {}
+
+            normalized = {
+                "start_date": weekly_summary.get("startDate", ""),
+                "end_date": weekly_summary.get("endDate", ""),
+                "usage_cost": float(weekly_summary.get("lastWeekCost", 0)),
+                "notes": weekly_summary.get("notes", []),
+                "usage_history": weekly_summary.get("usage", []),
+            }
+
+            _LOGGER.info("Normalized weekly summary data: %s", normalized)
+            return normalized
+
+        except Exception as exc:
+            _LOGGER.error("Error normalizing weekly summary data: %s", exc)
+            return {}
+
     async def get_monthly_summary(self, _retry_count: int = 0) -> dict[str, Any]:
         """Get monthly summary data from Mercury Energy using pymercury."""
         _LOGGER.debug("Getting monthly summary data... (retry count: %d)", _retry_count)
@@ -494,7 +610,13 @@ class MercuryAPI:
             )
 
             if not electricity_usage:
-                _LOGGER.error("❌ No electricity usage data returned")
+                _LOGGER.error("❌ No electricity usage data returned from get_electricity_usage API call")
+                _LOGGER.error("❌ This could indicate:")
+                _LOGGER.error("   - Authentication issues")
+                _LOGGER.error("   - Account has no electricity service")
+                _LOGGER.error("   - Mercury API is experiencing issues")
+                _LOGGER.error("   - Customer ID, Account ID, or Service ID are incorrect")
+                _LOGGER.error("❌ Returning empty usage data - sensors will show 0 values")
                 return {}
 
             _LOGGER.info("✅ Received ElectricityUsage: %s data points, %.2f kWh total",

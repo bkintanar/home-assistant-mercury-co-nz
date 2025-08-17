@@ -167,6 +167,42 @@ SENSOR_TYPES = {
         "device_class": None,
         "state_class": None,
     },
+    # Weekly Summary Sensors
+    "weekly_start_date": {
+        "name": "Weekly Period Start",
+        "unit": None,
+        "icon": "mdi:calendar-week-begin",
+        "device_class": "date",
+        "state_class": None,
+    },
+    "weekly_end_date": {
+        "name": "Weekly Period End",
+        "unit": None,
+        "icon": "mdi:calendar-week",
+        "device_class": "date",
+        "state_class": None,
+    },
+    "weekly_usage_cost": {
+        "name": "Weekly Usage Cost",
+        "unit": "$",
+        "icon": "mdi:currency-usd",
+        "device_class": "monetary",
+        "state_class": "total",
+    },
+    "weekly_notes": {
+        "name": "Weekly Usage Notes Count",
+        "unit": "notes",
+        "icon": "mdi:note-text",
+        "device_class": None,
+        "state_class": "measurement",
+    },
+    "weekly_usage_history": {
+        "name": "Weekly Usage Days Count",
+        "unit": "days",
+        "icon": "mdi:chart-line",
+        "device_class": None,
+        "state_class": "measurement",
+    },
     # Monthly Summary Sensors
     "monthly_billing_start_date": {
         "name": "Billing Period Start",

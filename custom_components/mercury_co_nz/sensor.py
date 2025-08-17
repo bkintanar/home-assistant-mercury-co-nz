@@ -145,14 +145,47 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
                 _LOGGER.warning("🔧 Sensor %s (unit: %s) has None value, returning 0. Entity unit: %s. Available keys: %s",
                               self._sensor_type, unit, self._attr_native_unit_of_measurement,
                               list(self.coordinator.data.keys())[:10])
+
+                # Additional debugging: categorize the available keys to help diagnose the issue
+                if self.coordinator.data:
+                    available_keys = list(self.coordinator.data.keys())
+                    bill_keys = [k for k in available_keys if k.startswith('bill_')]
+                    monthly_keys = [k for k in available_keys if k.startswith('monthly_')]
+                    content_keys = [k for k in available_keys if k.startswith('content_')]
+                    usage_keys = [k for k in available_keys if not k.startswith(('bill_', 'monthly_', 'content_'))]
+
+                    _LOGGER.info("🔍 Data analysis for sensor %s:", self._sensor_type)
+                    _LOGGER.info("   📊 Usage keys (%d): %s", len(usage_keys), usage_keys[:5])
+                    _LOGGER.info("   💳 Bill keys (%d): %s", len(bill_keys), bill_keys[:5])
+                    _LOGGER.info("   📅 Monthly keys (%d): %s", len(monthly_keys), monthly_keys[:3])
+                    _LOGGER.info("   📄 Content keys (%d): %s", len(content_keys), content_keys[:3])
+
+                    if not usage_keys and self._sensor_type in ['total_usage', 'energy_usage', 'current_bill', 'latest_daily_usage', 'latest_daily_cost', 'average_temperature', 'current_temperature', 'hourly_usage', 'monthly_usage']:
+                        _LOGGER.error("❌ DIAGNOSIS: Usage API call failed - no usage data keys found in coordinator data")
+                        _LOGGER.error("❌ This means get_usage_data() returned empty or failed")
+
                 return 0
             else:
                 # Return None for sensors without units (text sensors, etc.)
                 _LOGGER.debug("Sensor %s (no unit) has None value, returning None", self._sensor_type)
                 return None
 
-        # Handle date conversion for date sensors
-        if (self._sensor_type in ["due_date", "bill_due_date", "bill_bill_date", "monthly_billing_start_date", "monthly_billing_end_date"] and
+        # Handle complex data types that shouldn't be sensor states
+        if self._sensor_type in ["weekly_usage_history", "weekly_notes"]:
+            # For complex data that should be in attributes only, return a simple state
+            if self._sensor_type == "weekly_usage_history":
+                if isinstance(raw_value, list) and len(raw_value) > 0:
+                    return len(raw_value)  # Return the count of days
+                else:
+                    return 0
+            elif self._sensor_type == "weekly_notes":
+                if isinstance(raw_value, list) and len(raw_value) > 0:
+                    return len(raw_value)  # Return the count of notes
+                else:
+                    return 0
+
+        # Handle date conversion for date sensors (including weekly dates)
+        if (self._sensor_type in ["due_date", "bill_due_date", "bill_bill_date", "monthly_billing_start_date", "monthly_billing_end_date", "weekly_start_date", "weekly_end_date"] and
             raw_value is not None):
             try:
                 _LOGGER.debug("....... Processing date sensor %s with raw value: %s (type: %s)", self._sensor_type, repr(raw_value), type(raw_value))
@@ -307,6 +340,16 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             if attr in self.coordinator.data:
                 attributes[attr] = self.coordinator.data[attr]
 
+        # Add weekly summary attributes for all sensors (needed for weekly summary card)
+        weekly_attributes = [
+            "weekly_usage_cost", "weekly_start_date", "weekly_end_date",
+            "weekly_notes", "weekly_usage_history"
+        ]
+
+        for attr in weekly_attributes:
+            if attr in self.coordinator.data:
+                attributes[attr] = self.coordinator.data[attr]
+
         # Add content attributes for all sensors (needed for monthly summary card disclaimers)
         content_attributes = [
             "content_disclaimer_text", "content_monthly_summary_description"
@@ -321,7 +364,7 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             attributes["last_updated"] = self.coordinator.data["last_updated"]
 
         # Add formatted New Zealand dates for date sensors
-        if self._sensor_type in ["due_date", "bill_due_date", "bill_bill_date", "monthly_billing_start_date", "monthly_billing_end_date"]:
+        if self._sensor_type in ["due_date", "bill_due_date", "bill_bill_date", "monthly_billing_start_date", "monthly_billing_end_date", "weekly_start_date", "weekly_end_date"]:
             raw_value = self.coordinator.data.get(self._sensor_type)
             if raw_value:
                 try:

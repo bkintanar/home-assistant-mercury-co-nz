@@ -35,12 +35,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"/api/{DOMAIN}/monthly-summary-card.js",
             hass.config.path(f"custom_components/{DOMAIN}/monthly-summary-card.js"),
             True,
+        ),
+        StaticPathConfig(
+            f"/api/{DOMAIN}/weekly-summary-card.js",
+            hass.config.path(f"custom_components/{DOMAIN}/weekly-summary-card.js"),
+            True,
         )
     ])
 
     # Add the JS files to frontend
     add_extra_js_url(hass, f"/api/{DOMAIN}/chartjs-custom-card.js")
     add_extra_js_url(hass, f"/api/{DOMAIN}/monthly-summary-card.js")
+    add_extra_js_url(hass, f"/api/{DOMAIN}/weekly-summary-card.js")
 
     coordinator = MercuryDataUpdateCoordinator(
         hass,
