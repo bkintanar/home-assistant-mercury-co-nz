@@ -2,8 +2,8 @@
 // Modern LitElement implementation of the weekly summary card
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3.1.0/index.js?module';
-import { mercuryChartStyles, mercuryColors } from './mercury-lit-styles.js';
-import { mercuryLitCore } from './mercury-lit-core.js';
+import { mercuryChartStyles, mercuryColors } from './styles.js';
+import { mercuryLitCore } from './core.js';
 
 class MercuryWeeklySummaryCard extends LitElement {
   static styles = [
@@ -13,6 +13,11 @@ class MercuryWeeklySummaryCard extends LitElement {
       #weeklyChart {
         width: 100% !important;
         height: 100% !important;
+      }
+
+      /* Reduce usage-summary margin to align weekly date with monthly consumption */
+      .usage-summary {
+        margin-bottom: 8px; /* Reduced from default 16px to align with consumption text */
       }
     `
   ];
@@ -47,7 +52,6 @@ class MercuryWeeklySummaryCard extends LitElement {
   setConfig(config) {
     this.config = this.setConfigBase(config, 'Weekly Summary');
     this.config.show_notes = config.show_notes !== false;
-    console.log('Mercury Weekly Summary: Configuration set successfully with entity:', this.config.entity);
   }
 
   connectedCallback() {
@@ -83,10 +87,6 @@ class MercuryWeeklySummaryCard extends LitElement {
     this.cleanupLifecycleBase();
   }
 
-
-
-
-
   // Helper method to check if entity has weekly summary data
   _hasWeeklySummaryData() {
     const entity = this._getEntity();
@@ -107,50 +107,6 @@ class MercuryWeeklySummaryCard extends LitElement {
     } catch (error) {
       return '';
     }
-  }
-
-  // _formatDate() inherited from mercuryLitCore
-
-  // Helper method to get theme colors (copied from original)
-  _getThemeColor(cssVar, alpha = 1) {
-    let color = '';
-    const documentStyle = getComputedStyle(document.documentElement);
-    color = documentStyle.getPropertyValue(cssVar).trim();
-
-    if (!color) {
-      const fallbacks = {
-        '--primary-text-color': '#212121',
-        '--secondary-text-color': '#727272',
-        '--divider-color': '#e0e0e0'
-      };
-      color = fallbacks[cssVar] || '#212121';
-    }
-
-    return color;
-  }
-
-  // _isCardVisible() inherited from mercuryLitCore
-
-  // _setupVisibilityObserver() inherited from mercuryLitCore
-
-  // _loadChartJS() inherited from mercuryLitCore
-
-  // _detectDarkMode() inherited from mercuryLitCore
-
-  // Apply theme-specific adjustments
-  _applyThemeAdjustments() {
-    this.updateComplete.then(() => {
-      const card = this.shadowRoot.querySelector('ha-card');
-      if (!card) return;
-
-      const isDark = this.hasAttribute('dark-mode');
-
-      if (isDark) {
-        card.setAttribute('data-dark-mode', 'true');
-      } else {
-        card.removeAttribute('data-dark-mode');
-      }
-    });
   }
 
   // Create or update the chart
@@ -205,12 +161,8 @@ class MercuryWeeklySummaryCard extends LitElement {
       this._chart.data.labels = labels;
       this._chart.data.datasets[0].data = data;
       this._chart.update('none'); // 'none' disables animations
-
-      console.log('📊 Updated existing chart data for weekly summary');
     } else {
       // Create new chart only if one doesn't exist
-      console.log('📊 Creating new chart for weekly summary');
-
       // Destroy existing chart just in case
       if (this._chart) {
         this._chart.destroy();
@@ -303,7 +255,9 @@ class MercuryWeeklySummaryCard extends LitElement {
             }
           },
           onHover: (event, elements) => {
-            event.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+            if (event.native && event.native.target) {
+              event.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+            }
           }
         }
       });
@@ -339,24 +293,9 @@ class MercuryWeeklySummaryCard extends LitElement {
   }
 
   render() {
-    // Check configuration
-    if (!this.config) {
-      return this._renderConfigNeededState();
-    }
-
-    if (!this.config.entity) {
-      return this._renderConfigNeededState();
-    }
-
-    // Check hass availability
-    if (!this.hass) {
-      return this._renderLoadingState('Waiting for Home Assistant...', '⏳');
-    }
-
-    // Check entity availability
-    if (!this._isEntityAvailable()) {
-      return this._renderLoadingState('Waiting for Entity...', '⏳');
-    }
+    // Use common validation from core
+    const validationError = this._validateRenderConditions();
+    if (validationError) return validationError;
 
     const entity = this._getEntity();
 
@@ -367,35 +306,6 @@ class MercuryWeeklySummaryCard extends LitElement {
 
     // Render the main card
     return this._renderWeeklyCard(entity);
-  }
-
-  // Render loading state
-  _renderLoadingState(message, icon = '⏳') {
-    return html`
-      <ha-card>
-        <div class="loading-state">
-          <div class="loading-message">${icon} ${message}</div>
-          <div class="loading-description">Mercury Energy weekly data is loading</div>
-        </div>
-      </ha-card>
-    `;
-  }
-
-  // Render configuration needed state
-  _renderConfigNeededState() {
-    return html`
-      <ha-card>
-        <div class="loading-state">
-          <div class="loading-message">⚙️ Configuration Required</div>
-          <div class="loading-description" style="margin-bottom: 15px;">Please configure an entity for this Mercury Energy weekly summary</div>
-          <div style="font-size: 0.7em; background: var(--secondary-background-color, #f5f5f5); padding: 10px; border-radius: 4px; text-align: left;">
-            <strong>Example configuration:</strong><br/>
-            type: custom:mercury-weekly-summary-card<br/>
-            entity: sensor.mercury_nz_energy_usage
-          </div>
-        </div>
-      </ha-card>
-    `;
   }
 
   _renderWeeklyCard(entity) {
@@ -471,34 +381,27 @@ class MercuryWeeklySummaryCard extends LitElement {
       </ha-card>
     `;
   }
-
-  // Use default card size from core
-  // getCardSize() inherited from mercuryLitCore
 }
 
 // Register the custom element
-if (!customElements.get('mercury-weekly-summary-card')) {
-  customElements.define('mercury-weekly-summary-card', MercuryWeeklySummaryCard);
-  console.log('Mercury Weekly Summary Card: Custom element registered successfully');
-} else {
-  console.log('Mercury Weekly Summary Card: Custom element already registered');
+if (!customElements.get('mercury-energy-weekly-summary-card')) {
+  customElements.define('mercury-energy-weekly-summary-card', MercuryWeeklySummaryCard);
 }
 
 // Add to Home Assistant custom cards registry if available
 if (window.customCards) {
   window.customCards = window.customCards || [];
   window.customCards.push({
-    type: 'mercury-weekly-summary-card',
-    name: 'Mercury Weekly Summary Card',
+    type: 'mercury-energy-weekly-summary-card',
+    name: 'Mercury Energy Weekly Summary Card',
     description: 'Weekly summary card for Mercury Energy NZ built with LitElement',
     preview: false,
     documentationURL: 'https://github.com/bkintanar/home-assistant-mercury-co-nz'
   });
-  console.log('Mercury Weekly Summary Card: Added to Home Assistant custom cards registry');
 }
 
 console.info(
-  '%c MERCURY-WEEKLY-SUMMARY-CARD %c v2.0.0 ',
+  '%c MERCURY-ENERGY-WEEKLY-SUMMARY-CARD %c v1.0.0 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );

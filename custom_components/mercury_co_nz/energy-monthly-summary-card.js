@@ -2,8 +2,8 @@
 // Modern LitElement implementation of the monthly summary card
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3.1.0/index.js?module';
-import { mercuryCardStyles, mercuryColors } from './mercury-lit-styles.js';
-import { mercuryLitCore } from './mercury-lit-core.js';
+import { mercuryCardStyles, mercuryColors } from './styles.js';
+import { mercuryLitCore } from './core.js';
 
 class MercuryMonthlySummaryCard extends LitElement {
   static styles = [
@@ -14,6 +14,11 @@ class MercuryMonthlySummaryCard extends LitElement {
         color: var(--secondary-text-color);
         font-size: 16px;
         opacity: 0.7;
+      }
+
+      /* Override period-dates font size to match days-remaining */
+      .period-dates {
+        font-size: 14px !important; /* Match days-remaining font size */
       }
     `
   ];
@@ -37,8 +42,6 @@ class MercuryMonthlySummaryCard extends LitElement {
   setConfig(config) {
     this.config = this.setConfigBase(config, 'Monthly Summary');
     this.config.show_progress_bar = config.show_progress_bar !== false;
-
-    console.log('Mercury Monthly Summary: Configuration set successfully with entity:', this.config.entity);
   }
 
   connectedCallback() {
@@ -70,10 +73,6 @@ class MercuryMonthlySummaryCard extends LitElement {
     }
   }
 
-  // _getEntity() inherited from mercuryLitCore
-
-  // _isEntityAvailable() inherited from mercuryLitCore
-
   // Helper method to check if entity has monthly summary data
   _hasMonthlySummaryData() {
     const entity = this._getEntity();
@@ -85,8 +84,6 @@ class MercuryMonthlySummaryCard extends LitElement {
       entity.attributes.monthly_days_remaining !== undefined
     );
   }
-
-  // _formatDate() inherited from mercuryLitCore
 
   // Helper method to extract projected bill amount from note
   _extractProjectedBill(note) {
@@ -104,47 +101,14 @@ class MercuryMonthlySummaryCard extends LitElement {
       return [];
     }
 
-    // Split by \r\n\r\n to separate the two disclaimers
+    // Split by \r\n\r\n to separate any number of disclaimers
     return disclaimerText.split(/\r?\n\r?\n/).filter(text => text.trim());
   }
 
-  // _detectDarkMode() inherited from mercuryLitCore
-
-  // Apply theme-specific adjustments
-  _applyThemeAdjustments() {
-    this.updateComplete.then(() => {
-      const card = this.shadowRoot.querySelector('ha-card');
-      if (!card) return;
-
-      const isDark = this.hasAttribute('dark-mode');
-
-      if (isDark) {
-        card.setAttribute('data-dark-mode', 'true');
-      } else {
-        card.removeAttribute('data-dark-mode');
-      }
-    });
-  }
-
   render() {
-    // Check configuration
-    if (!this.config) {
-      return this._renderConfigNeededState();
-    }
-
-    if (!this.config.entity) {
-      return this._renderConfigNeededState();
-    }
-
-    // Check hass availability
-    if (!this.hass) {
-      return this._renderLoadingState('Waiting for Home Assistant...', '⏳');
-    }
-
-    // Check entity availability
-    if (!this._isEntityAvailable()) {
-      return this._renderLoadingState('Waiting for Entity...', '⏳');
-    }
+    // Use common validation from core
+    const validationError = this._validateRenderConditions();
+    if (validationError) return validationError;
 
     const entity = this._getEntity();
 
@@ -155,35 +119,6 @@ class MercuryMonthlySummaryCard extends LitElement {
 
     // Render the main card
     return this._renderMonthlyCard(entity);
-  }
-
-  // Render loading state
-  _renderLoadingState(message, icon = '⏳') {
-    return html`
-      <ha-card>
-        <div class="loading-state">
-          <div class="loading-message">${icon} ${message}</div>
-          <div class="loading-description">Mercury Energy monthly data is loading</div>
-        </div>
-      </ha-card>
-    `;
-  }
-
-  // Render configuration needed state
-  _renderConfigNeededState() {
-    return html`
-      <ha-card>
-        <div class="loading-state">
-          <div class="loading-message">⚙️ Configuration Required</div>
-          <div class="loading-description" style="margin-bottom: 15px;">Please configure an entity for this Mercury Energy monthly summary</div>
-          <div style="font-size: 0.7em; background: var(--secondary-background-color, #f5f5f5); padding: 10px; border-radius: 4px; text-align: left;">
-            <strong>Example configuration:</strong><br/>
-            type: custom:mercury-monthly-summary-card<br/>
-            entity: sensor.mercury_nz_energy_usage
-          </div>
-        </div>
-      </ha-card>
-    `;
   }
 
   _renderMonthlyCard(entity) {
@@ -270,28 +205,24 @@ class MercuryMonthlySummaryCard extends LitElement {
 }
 
 // Register the custom element
-if (!customElements.get('mercury-monthly-summary-card')) {
-  customElements.define('mercury-monthly-summary-card', MercuryMonthlySummaryCard);
-  console.log('Mercury Monthly Summary Card: Custom element registered successfully');
-} else {
-  console.log('Mercury Monthly Summary Card: Custom element already registered');
+if (!customElements.get('mercury-energy-monthly-summary-card')) {
+  customElements.define('mercury-energy-monthly-summary-card', MercuryMonthlySummaryCard);
 }
 
 // Add to Home Assistant custom cards registry if available
 if (window.customCards) {
   window.customCards = window.customCards || [];
   window.customCards.push({
-    type: 'mercury-monthly-summary-card',
-    name: 'Mercury Monthly Summary Card',
+    type: 'mercury-energy-monthly-summary-card',
+    name: 'Mercury Energy Monthly Summary Card',
     description: 'Monthly billing summary card for Mercury Energy NZ built with LitElement',
     preview: false,
     documentationURL: 'https://github.com/bkintanar/home-assistant-mercury-co-nz'
   });
-  console.log('Mercury Monthly Summary Card: Added to Home Assistant custom cards registry');
 }
 
 console.info(
-  '%c MERCURY-MONTHLY-SUMMARY-CARD %c v2.0.0 ',
+  '%c MERCURY-ENERGY-MONTHLY-SUMMARY-CARD %c v1.0.0 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );

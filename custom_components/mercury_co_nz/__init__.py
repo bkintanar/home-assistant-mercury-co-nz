@@ -27,24 +27,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register the frontend cards and core when the integration is set up
     await hass.http.async_register_static_paths([
         StaticPathConfig(
-            f"/api/{DOMAIN}/mercury-lit-core.js",
-            hass.config.path(f"custom_components/{DOMAIN}/mercury-lit-core.js"),
+            f"/api/{DOMAIN}/core.js",
+            hass.config.path(f"custom_components/{DOMAIN}/core.js"),
             True,
         ),
         StaticPathConfig(
-            f"/api/{DOMAIN}/mercury-lit-styles.js",
-            hass.config.path(f"custom_components/{DOMAIN}/mercury-lit-styles.js"),
+            f"/api/{DOMAIN}/styles.js",
+            hass.config.path(f"custom_components/{DOMAIN}/styles.js"),
             True,
         ),
 
         StaticPathConfig(
-            f"/api/{DOMAIN}/monthly-summary-card.js",
-            hass.config.path(f"custom_components/{DOMAIN}/monthly-summary-card.js"),
+            f"/api/{DOMAIN}/energy-monthly-summary-card.js",
+            hass.config.path(f"custom_components/{DOMAIN}/energy-monthly-summary-card.js"),
             True,
         ),
         StaticPathConfig(
-            f"/api/{DOMAIN}/weekly-summary-card.js",
-            hass.config.path(f"custom_components/{DOMAIN}/weekly-summary-card.js"),
+            f"/api/{DOMAIN}/energy-weekly-summary-card.js",
+            hass.config.path(f"custom_components/{DOMAIN}/energy-weekly-summary-card.js"),
             True,
         ),
         StaticPathConfig(
@@ -56,11 +56,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ])
 
     # Add the JS files to frontend (core and styles must be loaded first)
-    add_extra_js_url(hass, f"/api/{DOMAIN}/mercury-lit-core.js")
-    add_extra_js_url(hass, f"/api/{DOMAIN}/mercury-lit-styles.js")
+    add_extra_js_url(hass, f"/api/{DOMAIN}/core.js")
+    add_extra_js_url(hass, f"/api/{DOMAIN}/styles.js")
 
-    add_extra_js_url(hass, f"/api/{DOMAIN}/monthly-summary-card.js")
-    add_extra_js_url(hass, f"/api/{DOMAIN}/weekly-summary-card.js")
+    add_extra_js_url(hass, f"/api/{DOMAIN}/energy-monthly-summary-card.js")
+    add_extra_js_url(hass, f"/api/{DOMAIN}/energy-weekly-summary-card.js")
     add_extra_js_url(hass, f"/api/{DOMAIN}/energy-usage-card.js")
 
     coordinator = MercuryDataUpdateCoordinator(

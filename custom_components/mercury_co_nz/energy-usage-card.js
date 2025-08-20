@@ -2,8 +2,8 @@
 // Modern LitElement implementation of the energy usage chart card with Chart.js integration
 
 import { LitElement, html, css } from 'https://unpkg.com/lit@3.1.0/index.js?module';
-import { mercuryChartStyles, mercuryColors } from './mercury-lit-styles.js';
-import { mercuryLitCore } from './mercury-lit-core.js';
+import { mercuryChartStyles, mercuryColors } from './styles.js';
+import { mercuryLitCore } from './core.js';
 
 class MercuryEnergyUsageCard extends LitElement {
   static styles = [
@@ -118,10 +118,6 @@ class MercuryEnergyUsageCard extends LitElement {
     this.cleanupLifecycleBase();
   }
 
-  // _getEntity() inherited from mercuryLitCore
-
-  // _isEntityAvailable() inherited from mercuryLitCore
-
   // Helper method to check if entity has chart data
   _hasChartData() {
     const entity = this._getEntity();
@@ -134,16 +130,6 @@ class MercuryEnergyUsageCard extends LitElement {
       entity.attributes.extended_hourly_usage_history ||
       entity.attributes.monthly_usage_history
     );
-  }
-
-  // Helper method for date formatting
-  _formatDate(date, options = {}) {
-    const defaultOptions = {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric'
-    };
-    return date.toLocaleDateString("en-NZ", { ...defaultOptions, ...options });
   }
 
   // Helper method for hour formatting
@@ -202,6 +188,8 @@ class MercuryEnergyUsageCard extends LitElement {
     tooltip.style.zIndex = '10000';
     tooltip.style.pointerEvents = 'none';
     tooltip.style.whiteSpace = 'nowrap';
+    tooltip.style.minWidth = '25px';
+    tooltip.style.textAlign = 'center';
 
     // Get chart container
     const chartContainer = this.shadowRoot.querySelector('.chart-container');
@@ -210,46 +198,45 @@ class MercuryEnergyUsageCard extends LitElement {
     const chartRect = chartContainer.getBoundingClientRect();
     const containerRect = chartContainer.getBoundingClientRect();
 
-        // Calculate tooltip position relative to chart container
-    const tooltipWidth = 60; // Estimated width
-    const tooltipHeight = 32; // Estimated height
+    // Add tooltip to chart container first to measure it
+    chartContainer.appendChild(tooltip);
+
+    // Get actual tooltip dimensions after adding to DOM
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const tooltipWidth = tooltipRect.width;
+    const tooltipHeight = tooltipRect.height;
     const offset = 10; // Distance from data point
 
-    // Position tooltip above the data point (matches original)
+    // Position tooltip above the data point
     let tooltipLeft = dataPointX - (tooltipWidth / 2);
     let tooltipTop = dataPointY - tooltipHeight - offset;
 
-    // Ensure tooltip stays within chart bounds
+    // Ensure tooltip stays within horizontal bounds only
     if (tooltipLeft < 0) tooltipLeft = 5;
     if (tooltipLeft + tooltipWidth > chartContainer.clientWidth) {
       tooltipLeft = chartContainer.clientWidth - tooltipWidth - 5;
     }
-    if (tooltipTop < 0) {
-      tooltipTop = dataPointY + offset;
-    }
 
-    tooltip.style.left = `${tooltipLeft}px`;
-    tooltip.style.top = `${tooltipTop}px`;
+    tooltip.style.left = `${tooltipLeft + 9}px`;
+    tooltip.style.top = `${tooltipTop + 9}px`;
 
-    // Add tooltip to chart container
-    chartContainer.appendChild(tooltip);
-
-    // Create the arrow pointing down (matches original)
+    // Create the arrow pointing down (tooltip always above data point)
     const arrow = document.createElement('div');
     arrow.className = 'tooltip-arrow';
     arrow.id = 'customTooltipArrow';
 
     const arrowWidth = 10;
     const arrowHeight = 8;
-    const arrowLeft = tooltipLeft + (tooltipWidth / 2) - (arrowWidth / 2);
-    const arrowTop = tooltipTop + tooltipHeight; // Arrow below tooltip pointing down
+    // Calculate arrow position based on final tooltip position
+    const arrowLeft = tooltipLeft + 9 + (tooltipWidth / 2) - (arrowWidth / 2);
+    const arrowTop = tooltipTop + tooltipHeight + 8; // Arrow below tooltip with gap
 
     arrow.style.position = 'absolute';
     arrow.style.width = '0';
     arrow.style.height = '0';
     arrow.style.borderLeft = `${arrowWidth / 2}px solid transparent`;
     arrow.style.borderRight = `${arrowWidth / 2}px solid transparent`;
-    arrow.style.borderTop = `${arrowHeight}px solid ${bgColor}`; // Point down
+    arrow.style.borderTop = `${arrowHeight}px solid ${bgColor}`; // Arrow points down
     arrow.style.zIndex = '10001';
     arrow.style.left = `${arrowLeft}px`;
     arrow.style.top = `${arrowTop}px`;
@@ -258,16 +245,15 @@ class MercuryEnergyUsageCard extends LitElement {
     const arrowBorder = document.createElement('div');
     arrowBorder.className = 'tooltip-arrow-border';
     arrowBorder.id = 'customTooltipArrowBorder';
-
     arrowBorder.style.position = 'absolute';
     arrowBorder.style.width = '0';
     arrowBorder.style.height = '0';
     arrowBorder.style.borderLeft = '6px solid transparent';
     arrowBorder.style.borderRight = '6px solid transparent';
-    arrowBorder.style.borderTop = `9px solid ${borderColor}`; // Point down
+    arrowBorder.style.borderTop = `9px solid ${borderColor}`; // Arrow border points down
     arrowBorder.style.zIndex = '9999';
     arrowBorder.style.left = `${arrowLeft - 1}px`;
-    arrowBorder.style.top = `${arrowTop - 1}px`;
+    arrowBorder.style.top = `${arrowTop + 1}px`;
 
     // Add arrows to chart container
     chartContainer.appendChild(arrowBorder);
@@ -277,7 +263,7 @@ class MercuryEnergyUsageCard extends LitElement {
     this._stickyTooltip = true;
   }
 
-    // Hide custom tooltip (matches original hideCustomTooltip)
+  // Hide custom tooltip (matches original hideCustomTooltip)
   _hideCustomTooltip() {
     const chartContainer = this.shadowRoot.querySelector('.chart-container');
 
@@ -298,76 +284,6 @@ class MercuryEnergyUsageCard extends LitElement {
     this._stickyTooltip = false;
   }
 
-
-
-    // Set up component when it connects
-  connectedCallback() {
-    super.connectedCallback();
-
-    // Trigger chart creation if needed
-    if (this._isCardVisible() && this._hasChartData() && !this._chart) {
-      setTimeout(() => this._createOrUpdateChart(), 100);
-    }
-  }
-
-  // Called after the element's DOM has been updated for the first time
-  firstUpdated() {
-    // Initialize chart on first render with small delay to ensure DOM is ready
-      setTimeout(() => {
-      if (this._hasChartData()) {
-        // Load Chart.js if not already loaded, then create chart
-        if (!this._chartLoaded) {
-          this._loadChartJS().then(() => {
-            if (this._isCardVisible() && !this._chart) {
-              this._createOrUpdateChart();
-            }
-          }).catch(error => {
-            console.error('📊 Failed to load Chart.js in firstUpdated:', error);
-          });
-        } else if (this._isCardVisible() && !this._chart) {
-          this._createOrUpdateChart();
-        }
-      }
-    }, 100);
-  }
-
-  // Called after every update
-  updated(changedProperties) {
-    // If hass or config changed, potentially update chart
-    if (changedProperties.has('hass') || changedProperties.has('config')) {
-      // Ensure Chart.js is loaded before creating chart
-      if (this._isCardVisible() && this._hasChartData() && !this._chart) {
-        if (!this._chartLoaded) {
-          this._loadChartJS().then(() => {
-            if (this._isCardVisible() && this._hasChartData() && !this._chart) {
-              this._createOrUpdateChart();
-            }
-          }).catch(error => {
-            console.error('📊 Failed to load Chart.js in updated:', error);
-          });
-          } else {
-          this._createOrUpdateChart();
-        }
-      } else if (this._chart && this._hasChartData()) {
-        this._updateChartData();
-      }
-    }
-  }
-
-  // Clean up when component disconnects
-  disconnectedCallback() {
-    super.disconnectedCallback();
-
-    // Hide tooltip
-    this._hideCustomTooltip();
-
-    // Destroy chart
-    if (this._chart) {
-      this._chart.destroy();
-      this._chart = null;
-    }
-  }
-
   // Process hourly data (matches original processHourlyData)
   _processHourlyData(usageData) {
     // Always filter data for the selected date - no fallback logic needed since currentHourlyDate is set before processing
@@ -385,7 +301,7 @@ class MercuryEnergyUsageCard extends LitElement {
         const hourB = new Date(b.datetime || b.date).getHours();
         return hourA - hourB;
       });
-    } else {
+          } else {
       console.warn('⚠️ No currentHourlyDate set for hourly processing');
     }
 
@@ -425,7 +341,7 @@ class MercuryEnergyUsageCard extends LitElement {
     };
   }
 
-  // Build chart datasets based on period (matches original)
+  // Build chart datasets based on period
   _buildChartDatasets(usageData, temperatureData) {
     switch (this._currentPeriod) {
       case 'hourly':
@@ -495,14 +411,12 @@ class MercuryEnergyUsageCard extends LitElement {
             tension: 0.4,
             pointRadius: 0,
             pointHoverRadius: 0,
-            yAxisID: 'y',
+            yAxisID: 'y1',
             order: 1
           }
         ];
     }
   }
-
-
 
   // Get raw data based on current period
   _getRawDataForPeriod(entity) {
@@ -549,8 +463,6 @@ class MercuryEnergyUsageCard extends LitElement {
       }
     }
 
-
-
     const pageData = sortedData.slice(startIndex, endIndex).sort((a, b) => new Date(a.date || a.datetime) - new Date(b.date || b.datetime));
 
     return { sortedData, pageData, startIndex, endIndex };
@@ -560,121 +472,6 @@ class MercuryEnergyUsageCard extends LitElement {
   _shouldShowNavigation(rawData) {
     // Always show navigation for consistency with original card - arrows will be hidden when not needed
     return rawData.length > 0;
-  }
-
-  // Setup intersection observer for visibility detection
-  _setupVisibilityObserver() {
-    if ('IntersectionObserver' in window) {
-      this._visibilityObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting && entry.target === this) {
-            setTimeout(() => {
-              if (this._isCardVisible() && this._chartLoaded && this._hasChartData() && !this._chart) {
-              this._createOrUpdateChart();
-              }
-            }, 100);
-          }
-        });
-      }, {
-        root: null,
-        rootMargin: '50px',
-        threshold: 0.1
-      });
-    }
-
-    // Also listen for visibility change events (tab switching)
-    if (typeof document !== 'undefined') {
-      this._handleVisibilityChange = () => {
-        if (!document.hidden && this._isCardVisible() && this._chartLoaded && this._hasChartData() && !this._chart) {
-          setTimeout(() => this._createOrUpdateChart(), 200);
-        }
-      };
-
-      document.addEventListener('visibilitychange', this._handleVisibilityChange);
-    }
-  }
-
-  // Check if the card is actually visible
-  _isCardVisible() {
-    if (document.hidden) return false;
-    if (!this.isConnected) return false;
-
-    const rect = this.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return false;
-
-    const isInViewport = rect.top < window.innerHeight + 100 &&
-                        rect.bottom > -100 &&
-                        rect.left < window.innerWidth + 100 &&
-                        rect.right > -100;
-
-    const style = getComputedStyle(this);
-    const isStyleVisible = style.display !== 'none' &&
-                          style.visibility !== 'hidden' &&
-                          style.opacity !== '0';
-
-    return isInViewport && isStyleVisible;
-  }
-
-  // Load Chart.js library
-  async _loadChartJS() {
-    if (this._chartLoaded || window.Chart) {
-      this._chartLoaded = true;
-      return Promise.resolve();
-    }
-
-    if (this.chartLoadPromise) {
-      return this.chartLoadPromise;
-    }
-
-    this.chartLoadPromise = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js';
-      script.onload = () => {
-        this._chartLoaded = true;
-
-        if (this._isCardVisible() && this._hasChartData() && !this._chart) {
-          setTimeout(() => this._createOrUpdateChart(), 100);
-        }
-
-        resolve();
-      };
-      script.onerror = () => {
-        console.error('📊 Failed to load Chart.js for energy usage chart (LitElement)');
-        reject(new Error('Failed to load Chart.js'));
-      };
-      document.head.appendChild(script);
-    });
-
-    return this.chartLoadPromise;
-  }
-
-  // Detect dark mode
-  _detectDarkMode() {
-    const isDark = window.getComputedStyle(document.body)
-      .getPropertyValue('--primary-background-color')
-      .includes('#1');
-
-    if (isDark) {
-      this.setAttribute('dark-mode', '');
-    } else {
-      this.removeAttribute('dark-mode');
-    }
-  }
-
-  // Apply theme-specific adjustments
-  _applyThemeAdjustments() {
-    this.updateComplete.then(() => {
-      const card = this.shadowRoot.querySelector('ha-card');
-      if (!card) return;
-
-      const isDark = this.hasAttribute('dark-mode');
-
-      if (isDark) {
-        card.setAttribute('data-dark-mode', 'true');
-      } else {
-        card.removeAttribute('data-dark-mode');
-      }
-    });
   }
 
   // Create or update the chart
@@ -691,7 +488,7 @@ class MercuryEnergyUsageCard extends LitElement {
     const rawData = this._getRawDataForPeriod(entity);
     if (!rawData.length) return;
 
-    // For hourly view, set currentHourlyDate to latest available data BEFORE processing (matches original)
+    // For hourly view, set currentHourlyDate to latest available data BEFORE processing
     if (this._currentPeriod === 'hourly' && !this._currentHourlyDate) {
       // Find the latest date in the hourly data
       const sortedData = rawData.sort((a, b) => new Date(b.datetime || b.date) - new Date(a.datetime || a.date));
@@ -714,7 +511,8 @@ class MercuryEnergyUsageCard extends LitElement {
     const canvas = this.shadowRoot.getElementById('energyChart');
     if (!canvas) {
       console.warn('Chart canvas not found, retrying in 100ms...');
-    setTimeout(() => {
+
+      setTimeout(() => {
         if (this.shadowRoot.getElementById('energyChart')) {
           this._createOrUpdateChart();
         }
@@ -734,7 +532,7 @@ class MercuryEnergyUsageCard extends LitElement {
       return;
     }
 
-    // Process data based on period (matches original)
+    // Process data based on period
     let labels, usageData, temperatureData, costData, pageData, tempData = [];
 
     if (this._currentPeriod === 'hourly') {
@@ -750,7 +548,7 @@ class MercuryEnergyUsageCard extends LitElement {
       const { pageData: paginatedData } = this._getPaginatedData(rawData);
       pageData = paginatedData;
 
-      // Get temperature data for daily view (matches original)
+      // Get temperature data for daily view
       if (this._currentPeriod === 'daily') {
         const rawTempData = entity.attributes.recent_temperatures || [];
         const { pageData: tempPageData } = this._getPaginatedData(rawTempData);
@@ -774,12 +572,12 @@ class MercuryEnergyUsageCard extends LitElement {
 
         labels = paddedPageData.map((item, index) => {
           if (item.date) {
-            // Create labels formatted as "24 Jun", "24 Jul" for monthly billing dates (matches original)
+            // Create labels formatted as "24 Jun", "24 Jul" for monthly billing dates
             const date = new Date(item.date);
             const day = date.getDate();
             const month = date.toLocaleDateString("en-NZ", { month: "short" });
             return `${day} ${month}`;
-      } else {
+          } else {
             // Empty label for padding
             return '';
           }
@@ -809,8 +607,6 @@ class MercuryEnergyUsageCard extends LitElement {
 
     // If chart exists and dataset structure is compatible, just update the data
     if (this._chart && this._chart.data && !needsRecreation) {
-
-
       this._chart.data.labels = labels;
       this._chart.data.datasets[0].data = usageData;
 
@@ -822,24 +618,29 @@ class MercuryEnergyUsageCard extends LitElement {
       this._chart.update('none');
 
       // Update chart raw data for interactions
-    this.chartRawData = {
+      this.chartRawData = {
         usage: pageData,
         temp: tempData,
         cost: costData
       };
 
-
     } else {
       // Create new chart
-
-
       if (this._chart) {
         this._chart.destroy();
         this._chart = null;
       }
 
-      // Build datasets based on period (matches original)
+      // Build datasets based on period
       const datasets = this._buildChartDatasets(usageData, temperatureData);
+
+      // Calculate dynamic temperature scale based on energy data range
+      const maxEnergyValue = Math.max(...usageData.filter(val => val !== null && val !== undefined));
+      const energyRange = maxEnergyValue || 50; // Fallback to 50 if no data
+
+      // Set temperature scale to be proportional to energy scale
+      // This ensures temperature line maintains relative position regardless of energy range
+      const temperatureScaleMax = Math.max(20, energyRange * 0.45); // Min 20°C, or 45% of energy range
 
       const ctx = canvas.getContext('2d');
       this._chart = new Chart(ctx, {
@@ -868,15 +669,15 @@ class MercuryEnergyUsageCard extends LitElement {
                 return 0;
               }
             }
-        },
-        plugins: {
+          },
+          plugins: {
             legend: {
             display: false
           },
           tooltip: {
             enabled: false,  // Disable default hover tooltips
             external: (context) => {
-                // Custom tooltip that only shows on click, not hover (matches original)
+              // Custom tooltip that only shows on click, not hover
                 return; // We handle tooltips manually
             }
           }
@@ -914,12 +715,28 @@ class MercuryEnergyUsageCard extends LitElement {
                 weight: 600
               }
             }
+          },
+          y1: {
+            type: 'linear',
+            display: false,
+            position: 'right',
+            min: 0,
+            max: temperatureScaleMax,
+            grid: {
+              drawOnChartArea: false,
+            },
+            ticks: {
+              display: false
+            },
+            title: {
+              display: false
+            }
           }
         },
         onClick: (event, elements) => {
           if (elements.length > 0) {
             const dataIndex = elements[0].index;
-              // Show custom tooltip using actual click position (matches original)
+            // Show custom tooltip using actual click position
               this._showTemperatureTooltip(event, dataIndex);
               // Update the info display and navigation label
               const selectedItem = this.chartRawData.usage[dataIndex];
@@ -940,8 +757,10 @@ class MercuryEnergyUsageCard extends LitElement {
           }
         },
         onHover: (event, elements) => {
-            // Only change cursor, no hover tooltips (matches original)
-          event.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+          // Only change cursor, no hover tooltips
+          if (event.native && event.native.target) {
+            event.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+          }
         }
       }
       });
@@ -1030,7 +849,7 @@ class MercuryEnergyUsageCard extends LitElement {
 
       labels = paddedPageData.map((item, index) => {
         if (item.date) {
-          // Create labels formatted as "24 Jun", "24 Jul" for monthly billing dates (matches original)
+        // Create labels formatted as "24 Jun", "24 Jul" for monthly billing dates
           const date = new Date(item.date);
       const day = date.getDate();
       const month = date.toLocaleDateString("en-NZ", { month: "short" });
@@ -1081,23 +900,7 @@ class MercuryEnergyUsageCard extends LitElement {
     this.requestUpdate();
   }
 
-  // Helper method to get theme colors
-  _getThemeColor(cssVar, alpha = 1) {
-    let color = '';
-    const documentStyle = getComputedStyle(document.documentElement);
-    color = documentStyle.getPropertyValue(cssVar).trim();
-
-    if (!color) {
-      const fallbacks = {
-        '--primary-text-color': '#212121',
-        '--secondary-text-color': '#727272',
-        '--divider-color': '#e0e0e0'
-      };
-      color = fallbacks[cssVar] || '#212121';
-    }
-
-    return color;
-  }
+  // _getThemeColor() inherited from mercuryLitCore
 
   // Update selected info display
   _updateSelectedInfo(selectedItem) {
@@ -1120,7 +923,7 @@ class MercuryEnergyUsageCard extends LitElement {
       dateFormatted,
       cost: selectedItem.cost || 0,
       consumption: selectedItem.consumption || selectedItem.usage || 0,
-      // Store full item data for monthly billing period (matches original)
+      // Store full item data for monthly billing period
       rawItem: selectedItem
     };
 
@@ -1131,7 +934,7 @@ class MercuryEnergyUsageCard extends LitElement {
   _handlePeriodChange(newPeriod) {
     if (newPeriod === this._currentPeriod) return;
 
-    // Hide tooltip when changing periods (matches original)
+    // Hide tooltip when changing periods
     this._hideCustomTooltip();
 
     const previousPeriod = this._currentPeriod;
@@ -1160,7 +963,7 @@ class MercuryEnergyUsageCard extends LitElement {
     this.requestUpdate();
   }
 
-    // Handle navigation
+  // Handle navigation
   _handleNavigation(direction) {
     // Hide tooltip when navigating
     this._hideCustomTooltip();
@@ -1356,7 +1159,7 @@ class MercuryEnergyUsageCard extends LitElement {
         const hourDisplay = this._formatHourDisplay(hourToShow);
         return `${dateStr}\n${hourDisplay}`;
       } else if (this._currentPeriod === 'monthly') {
-        // For monthly view, show the billing period date range (matches original)
+        // For monthly view, show the billing period date range
 
         // If a specific item is selected, show its billing period (matches original behavior)
         if (this._selectedDate && this._selectedDate.rawItem) {
@@ -1393,7 +1196,7 @@ class MercuryEnergyUsageCard extends LitElement {
         const endStr = endDate.toLocaleDateString("en-NZ", { month: 'short', year: 'numeric' });
         const dateRange = startStr === endStr ? startStr : `${startStr} - ${endStr}`;
         return `${dateRange}\n&nbsp;`;
-      } else {
+        } else {
         // For daily view, show specific selected date if available, otherwise show latest date from current page
         if (this._selectedDate && this._selectedDate.date) {
           // Show the selected date in format "16 Aug 2025" with newline and nbsp for consistent height
@@ -1428,24 +1231,9 @@ class MercuryEnergyUsageCard extends LitElement {
   }
 
   render() {
-    // Check configuration
-    if (!this.config) {
-      return this._renderConfigNeededState();
-    }
-
-    if (!this.config.entity) {
-      return this._renderConfigNeededState();
-    }
-
-    // Check hass availability
-    if (!this.hass) {
-      return this._renderLoadingState('Waiting for Home Assistant...', '⏳');
-    }
-
-    // Check entity availability
-    if (!this._isEntityAvailable()) {
-      return this._renderLoadingState('Waiting for Entity...', '⏳');
-    }
+    // Use common validation from core
+    const validationError = this._validateRenderConditions();
+    if (validationError) return validationError;
 
     const entity = this._getEntity();
 
@@ -1458,34 +1246,9 @@ class MercuryEnergyUsageCard extends LitElement {
     return this._renderEnergyUsageCard(entity);
   }
 
-  // Render loading state
-  _renderLoadingState(message, icon = '⏳') {
-    return html`
-      <ha-card>
-        <div class="loading-state">
-          <div class="loading-message">${icon} ${message}</div>
-          <div class="loading-description">Mercury Energy chart data is loading</div>
-        </div>
-      </ha-card>
-    `;
-  }
+  // _renderLoadingState() inherited from mercuryLitCore
 
-  // Render configuration needed state
-  _renderConfigNeededState() {
-    return html`
-      <ha-card>
-        <div class="loading-state">
-          <div class="loading-message">⚙️ Configuration Required</div>
-          <div class="loading-description" style="margin-bottom: 15px;">Please configure an entity for this Mercury Energy chart</div>
-          <div style="font-size: 0.7em; background: var(--secondary-background-color, #f5f5f5); padding: 10px; border-radius: 4px; text-align: left;">
-            <strong>Example configuration:</strong><br/>
-            type: custom:mercury-energy-usage-card<br/>
-            entity: sensor.mercury_nz_energy_usage
-          </div>
-        </div>
-      </ha-card>
-    `;
-  }
+  // _renderConfigNeededState() inherited from mercuryLitCore
 
   _renderEnergyUsageCard(entity) {
     const rawData = this._getRawDataForPeriod(entity);
@@ -1548,7 +1311,7 @@ class MercuryEnergyUsageCard extends LitElement {
 
   _renderNavigation() {
     const description = this._getNavigationDescription();
-    // Handle newlines in description for hourly view (matches original)
+    // Handle newlines in description for hourly view
     const formattedDescription = description.replace(/\n/g, '<br/>');
 
     return html`
@@ -1592,7 +1355,7 @@ class MercuryEnergyUsageCard extends LitElement {
       </div>
     `;
 
-    // Only show temperature legend for daily view (matches original)
+    // Only show temperature legend for daily view
     const showTemperature = this._currentPeriod === 'daily';
 
     return html`

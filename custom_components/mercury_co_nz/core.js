@@ -3,6 +3,8 @@
  * Used by: weekly-summary-card.js, monthly-summary-card.js, energy-usage-card.js
  */
 
+import { html } from 'https://unpkg.com/lit@3.1.0/index.js?module';
+
 // Mercury Energy LitElement Core - Common functionality for all LitElement cards
 export const mercuryLitCore = {
   // ===== INITIALIZATION METHODS =====
@@ -71,7 +73,6 @@ export const mercuryLitCore = {
       script.onload = () => {
         if (window.Chart) {
           this._chartLoaded = true;
-          console.log('📊 Chart.js loaded successfully for Mercury Energy card');
           resolve();
         } else {
           reject(new Error('Chart.js loaded but not accessible'));
@@ -304,23 +305,162 @@ export const mercuryLitCore = {
     return false;
   },
 
+  // Get theme color with fallbacks (used by chart cards for styling)
+  _getThemeColor(cssVar, alpha = 1) {
+    let color = '';
+    const documentStyle = getComputedStyle(document.documentElement);
+    color = documentStyle.getPropertyValue(cssVar).trim();
+
+    // Method 2: Check body if not found
+    if (!color) {
+      const bodyStyle = getComputedStyle(document.body);
+      color = bodyStyle.getPropertyValue(cssVar).trim();
+    }
+
+    // Method 3: Check ha-main element (Home Assistant main container)
+    if (!color) {
+      const haMain = document.querySelector('ha-main') || document.querySelector('home-assistant-main');
+      if (haMain) {
+        const haMainStyle = getComputedStyle(haMain);
+        color = haMainStyle.getPropertyValue(cssVar).trim();
+      }
+    }
+
+    if (!color) {
+      // Fallback colors based on dark/light mode detection
+      const isDarkMode = this._detectDarkMode();
+      const fallbacks = isDarkMode ? {
+        // Dark mode fallbacks
+        '--primary-text-color': '#e1e1e1',
+        '--secondary-text-color': '#9b9b9b',
+        '--divider-color': '#474747',
+        '--ha-card-background': '#1c1c1c',
+        '--card-background-color': '#1c1c1c'
+      } : {
+        // Light mode fallbacks
+        '--primary-text-color': '#212121',
+        '--secondary-text-color': '#727272',
+        '--divider-color': '#e0e0e0',
+        '--ha-card-background': '#ffffff',
+        '--card-background-color': '#ffffff'
+      };
+      color = fallbacks[cssVar] || (isDarkMode ? '#e1e1e1' : '#212121');
+    }
+
+    // Handle different color formats and alpha
+    if (color.startsWith('#')) {
+      return alpha === 1 ? color : this._hexToRgba(color, alpha);
+    } else if (color.startsWith('rgb')) {
+      if (alpha === 1) return color;
+      // Convert rgb to rgba
+      const rgbMatch = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+      if (rgbMatch) {
+        return `rgba(${rgbMatch[1]}, ${rgbMatch[2]}, ${rgbMatch[3]}, ${alpha})`;
+      }
+    }
+
+    return color || (this._detectDarkMode() ? '#e1e1e1' : '#212121');
+  },
+
+  // Convert hex to rgba
+  _hexToRgba(hex, alpha = 1) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  },
+
+  // Apply theme-specific adjustments to card
+  _applyThemeAdjustments() {
+    this.updateComplete.then(() => {
+      const card = this.shadowRoot.querySelector('ha-card');
+      if (!card) return;
+
+      const isDark = this._detectDarkMode();
+
+      if (isDark) {
+        this.setAttribute('dark-mode', '');
+        card.setAttribute('data-dark-mode', 'true');
+      } else {
+        this.removeAttribute('dark-mode');
+        card.removeAttribute('data-dark-mode');
+      }
+    });
+  },
+
   // ===== STANDARD METHODS =====
 
   getCardSize(size = 6) {
     return size;
   },
 
+  // ===== RENDER VALIDATION METHODS =====
+
+  // Common render validation that all cards need
+  _validateRenderConditions() {
+    // Check configuration
+    if (!this.config) {
+      return this._renderConfigNeededState();
+    }
+
+    if (!this.config.entity) {
+      return this._renderConfigNeededState();
+    }
+
+    // Check hass availability
+    if (!this.hass) {
+      return this._renderLoadingState('Waiting for Home Assistant...', '⏳');
+    }
+
+    // Check entity availability
+    if (!this._isEntityAvailable()) {
+      return this._renderLoadingState('Waiting for Entity...', '⏳');
+    }
+
+    // All validations passed - return null to indicate success
+    return null;
+  },
+
   // ===== ERROR STATE METHODS =====
 
+  // Helper method to generate configuration data for render methods
+  _getConfigNeededStateData() {
+    // Determine card type and element name from config
+    const cardName = this.config?.name || 'Mercury Energy Card';
+    let elementType = 'mercury-energy-card';
+    let description = 'Please configure an entity for this Mercury Energy card';
+
+    // Dynamic card type detection based on config name
+    if (cardName.toLowerCase().includes('monthly')) {
+      elementType = 'mercury-energy-monthly-summary-card';
+      description = 'Please configure an entity for this Mercury Energy monthly summary';
+    } else if (cardName.toLowerCase().includes('weekly')) {
+      elementType = 'mercury-energy-weekly-summary-card';
+      description = 'Please configure an entity for this Mercury Energy weekly summary';
+    } else if (cardName.toLowerCase().includes('usage')) {
+      elementType = 'mercury-energy-usage-card';
+      description = 'Please configure an entity for this Mercury Energy usage chart';
+    }
+
+    return {
+      elementType,
+      description,
+      cardName
+    };
+  },
+
+  // Render configuration needed state with HTML template
   _renderConfigNeededState() {
-    return `
+    const { elementType, description } = this._getConfigNeededStateData();
+
+    return html`
       <ha-card>
-        <div style="padding: 20px; text-align: center;">
-          <div style="margin-bottom: 10px;">⚙️ Configuration Required</div>
-          <div style="font-size: 0.8em; opacity: 0.7; margin-bottom: 15px;">Please configure an entity for this Mercury Energy card</div>
+        <div class="loading-state">
+          <div class="loading-message">⚙️ Configuration Required</div>
+          <div class="loading-description" style="margin-bottom: 15px;">${description}</div>
           <div style="font-size: 0.7em; background: var(--secondary-background-color, #f5f5f5); padding: 10px; border-radius: 4px; text-align: left;">
             <strong>Example configuration:</strong><br/>
-            type: custom:mercury-energy-card<br/>
+            type: custom:${elementType}<br/>
             entity: sensor.mercury_nz_energy_usage
           </div>
         </div>
@@ -329,7 +469,7 @@ export const mercuryLitCore = {
   },
 
   _renderEntityUnavailableState() {
-    return `
+    return html`
       <ha-card>
         <div style="padding: 20px; text-align: center;">
           <div style="margin-bottom: 10px;">⚠️ Entity Unavailable</div>
@@ -340,12 +480,26 @@ export const mercuryLitCore = {
     `;
   },
 
-  _renderLoadingState() {
-    return `
+  _renderLoadingState(message = 'Loading...', icon = '📊', description = null) {
+    // Generate card-specific description if not provided
+    if (!description) {
+      const cardName = this.config?.name || 'Mercury Energy Card';
+      if (cardName.toLowerCase().includes('monthly')) {
+        description = 'Mercury Energy monthly data is loading';
+      } else if (cardName.toLowerCase().includes('weekly')) {
+        description = 'Mercury Energy weekly data is loading';
+      } else if (cardName.toLowerCase().includes('usage')) {
+        description = 'Mercury Energy chart data is loading';
+      } else {
+        description = 'Mercury Energy data is loading';
+      }
+    }
+
+    return html`
       <ha-card>
-        <div style="padding: 20px; text-align: center;">
-          <div style="margin-bottom: 10px;">📊 Loading...</div>
-          <div style="font-size: 0.8em; opacity: 0.7;">Mercury Energy data is being loaded</div>
+        <div class="loading-state">
+          <div class="loading-message">${icon} ${message}</div>
+          <div class="loading-description">${description}</div>
         </div>
       </ha-card>
     `;
@@ -353,7 +507,7 @@ export const mercuryLitCore = {
 };
 
 console.info(
-  '%c MERCURY-LIT-CORE %c v1.0.0 ',
+  '%c MERCURY-CORE %c v1.0.0 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );

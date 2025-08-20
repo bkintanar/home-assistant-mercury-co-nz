@@ -276,7 +276,7 @@ export const chartStyles = css`
 // Progress bar styles - for billing period progress
 export const progressBarStyles = css`
   .progress-container {
-    margin-bottom: 20px;
+    margin-bottom: 4px;
   }
 
   .progress-bar {
@@ -612,5 +612,3 @@ export const mercuryColors = {
   DARK_BORDER: '#3d3d3d',
   TEMPERATURE_BLUE: 'rgb(105, 162, 185)'
 };
-
-console.log('Mercury LitElement Styles: Loaded successfully');
