@@ -4,9 +4,35 @@ A custom Home Assistant integration that provides beautiful, interactive energy 
 
 ## Demo
 
-### Electricity Usage
+### Energy Usage
 
-![Electricity Usage](assets/energy-usage.gif)
+```yaml
+type: custom:mercury-energy-usage-card
+entity: sensor.mercury_nz_energy_usage
+name: Energy Usage Charts
+```
+
+![Energy Usage](assets/mercury-energy-usage.gif)
+
+### Energy Weekly Summary
+
+```yaml
+type: custom:mercury-energy-weekly-summary-card
+entity: sensor.mercury_nz_energy_usage
+name: Weekly Summary
+```
+
+![Energy Weekly Summary](assets/energy-weekly-summary.png)
+
+### Energy Monthly Summary
+
+```yaml
+type: custom:mercury-energy-monthly-summary-card
+entity: sensor.mercury_nz_current_period_cost
+name: Monthly Summary
+```
+
+![Energy Monthly Summary](assets/monthly-summary.png)
 
 ## ✨ Features
 
@@ -86,10 +112,9 @@ A custom Home Assistant integration that provides beautiful, interactive energy 
 Add this to your Home Assistant dashboard:
 
 ```yaml
-type: custom:mercury-energy-chart-card
+type: custom:mercury-energy-usage-card
 entity: sensor.mercury_nz_energy_usage
-name: ⚡️ ELECTRICITY USAGE
-show_navigation: true
+name: Energy Usage Charts
 ```
 
 ### Configuration Options
@@ -99,7 +124,6 @@ show_navigation: true
 | `entity`          | string  | **required**             | The Mercury Energy sensor entity      |
 | `name`            | string  | "Energy Usage"           | Card title                            |
 | `show_navigation` | boolean | `false`                  | Show previous/next navigation         |
-| `items_per_page`  | number  | `12`                     | Days to show per page                 |
 | `period`          | string  | `hourly\|daily\|monthly` | Time periods to show (pipe-separated) |
 
 ## 📋 Requirements
@@ -125,7 +149,7 @@ docker restart homeassistant
 ### Basic Card
 
 ```yaml
-type: custom:mercury-energy-chart-card
+type: custom:mercury-energy-usage-card
 entity: sensor.mercury_nz_energy_usage
 name: Daily Usage
 ```
@@ -141,10 +165,9 @@ name: Daily Usage
 ### Advanced Card with Navigation
 
 ```yaml
-type: custom:mercury-energy-chart-card
+type: custom:mercury-energy-usage-card
 entity: sensor.mercury_nz_energy_usage
-name: ⚡️ ELECTRICITY USAGE
-show_navigation: true
+name: Energy Usage Charts
 ```
 
 ### Period Filtering Examples
@@ -152,31 +175,28 @@ show_navigation: true
 Show only daily and monthly views:
 
 ```yaml
-type: custom:mercury-energy-chart-card
+type: custom:mercury-energy-usage-card
 entity: sensor.mercury_nz_energy_usage
-name: ⚡️ ELECTRICITY USAGE
+name: Energy Usage Charts
 period: daily|monthly
-show_navigation: true
 ```
 
 Show only hourly view:
 
 ```yaml
-type: custom:mercury-energy-chart-card
+type: custom:mercury-energy-usage-card
 entity: sensor.mercury_nz_energy_usage
-name: ⚡️ HOURLY USAGE
+name: Hourly Usage
 period: hourly
-show_navigation: true
 ```
 
 Show all periods (default):
 
 ```yaml
-type: custom:mercury-energy-chart-card
+type: custom:mercury-energy-usage-card
 entity: sensor.mercury_nz_energy_usage
-name: ⚡️ ELECTRICITY USAGE
+name: Energy Usage Charts
 period: hourly|daily|monthly
-show_navigation: true
 ```
 
 ### Monthly Summary Card
@@ -184,7 +204,7 @@ show_navigation: true
 ```yaml
 type: custom:mercury-monthly-summary-card
 entity: sensor.mercury_nz_current_period_cost
-name: MONTHLY SUMMARY
+name: Monthly Summary
 show_progress_bar: true
 ```
 
@@ -282,7 +302,7 @@ custom_components/mercury_co_nz/
 
 ### Navigation Not Working
 
-1. Ensure `show_navigation: true` in configuration
+1. Ensure ` in configuration
 2. Verify sufficient historical data exists
 3. Check Home Assistant logs for errors
 
