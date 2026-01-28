@@ -8,13 +8,32 @@
           "email": "Email",
           "password": "Password"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Mercury",
+        "description": "Update your Mercury account email or password. After saving, the integration will reload and sensors will refresh.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "already_configured_update": {
+        "title": "Account already set up",
+        "description": "This Mercury account ({email}) is already in Home Assistant but may not have loaded (no sensors). Submit below to remove the old entry and add a fresh one so the integration and sensors are created.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to Mercury.co.nz. Please check your credentials and try again."
     },
     "abort": {
-      "already_configured": "Account is already configured"
+      "already_configured": "This Mercury account is already set up. If you don't see sensors (e.g. sensor.mercury_nz_energy_usage), go to Settings → Devices & services, search 'Mercury', open the Mercury NZ integration, and click **Reload** (or restart Home Assistant). Use Developer Tools → States and search 'mercury' to see entity IDs.",
+      "reconfigure_successful": "Configuration updated. The Mercury integration may only appear under HACS in Devices & services (Settings → Devices & services → click HACS → find Mercury NZ). Your sensors should now be available: go to Developer Tools → States, search 'mercury', and use sensor.mercury_nz_energy_usage in your dashboard cards.",
+      "reconfigure_reload_failed": "Configuration was updated but reload failed. Restart Home Assistant (Settings → System → Restart) so the Mercury integration and sensors load.",
+      "reconfigure_failed": "Could not find the integration entry to reconfigure."
     }
   }
 }

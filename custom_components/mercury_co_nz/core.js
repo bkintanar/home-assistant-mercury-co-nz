@@ -414,7 +414,12 @@ export const mercuryLitCore = {
 
     // Check entity availability
     if (!this._isEntityAvailable()) {
-      return this._renderLoadingState('Waiting for Entity...', '⏳');
+      const entity = this._getEntity();
+      const entityId = this.config.entity || '?';
+      const description = !entity
+        ? `Entity "${entityId}" not found. Add the Mercury integration (Settings → Devices & services → Add integration → Mercury CO NZ) and ensure the sensor exists. Check Developer Tools → States for "mercury".`
+        : `Entity "${entityId}" is ${entity.state || 'unknown'}. If this persists, check the Mercury integration and HA logs for API or auth errors.`;
+      return this._renderLoadingState('Waiting for Entity...', '⏳', description);
     }
 
     // All validations passed - return null to indicate success

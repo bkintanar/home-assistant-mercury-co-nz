@@ -1,6 +1,25 @@
 """Constants for the Mercury Energy NZ integration."""
 
-DOMAIN = "mercury_co_nz"
+import json
+from pathlib import Path
+from typing import Final
+
+# Read version from manifest.json
+_MANIFEST_PATH = Path(__file__).parent / "manifest.json"
+with open(_MANIFEST_PATH, encoding="utf-8") as _f:
+    INTEGRATION_VERSION: Final[str] = json.load(_f).get("version", "0.0.0")
+
+DOMAIN: Final[str] = "mercury_co_nz"
+
+# Base URL for frontend Lovelace resources (must match static path prefix)
+URL_BASE: Final[str] = f"/api/{DOMAIN}"
+
+# JavaScript modules to register as Lovelace resources (cards only; core/styles are imported by cards)
+JSMODULES: Final[list[dict[str, str]]] = [
+    {"name": "Mercury Energy Usage Card", "filename": "energy-usage-card.js", "version": INTEGRATION_VERSION},
+    {"name": "Mercury Energy Weekly Summary Card", "filename": "energy-weekly-summary-card.js", "version": INTEGRATION_VERSION},
+    {"name": "Mercury Energy Monthly Summary Card", "filename": "energy-monthly-summary-card.js", "version": INTEGRATION_VERSION},
+]
 
 # Configuration keys
 CONF_EMAIL = "email"

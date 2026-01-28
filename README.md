@@ -86,6 +86,10 @@ name: Monthly Summary
    - Click Install
    - Restart Home Assistant
 
+3. **Add the integration** (required after HACS install):
+   - Go to **Settings → Devices & services** → **Add integration** → search **"Mercury"** or **"Mercury CO NZ"**
+   - Enter your Mercury Energy NZ email and password. Sensors appear under the integration; use **Developer Tools → States** and search `mercury` for entity IDs (e.g. `sensor.mercury_nz_energy_usage`).
+
 ### Option 2: Manual Installation
 
 1. **Copy Files**:
@@ -102,10 +106,12 @@ name: Monthly Summary
 
 ### 1. Add Integration
 
-- Go to Configuration → Integrations
-- Click "Add Integration"
-- Search for "Mercury Energy NZ"
-- Enter your Mercury Energy credentials
+- Go to **Settings → Devices & services**
+- Click **"+ Add integration"**
+- Search for **"Mercury"** or **"Mercury CO NZ"**
+- Enter your Mercury Energy NZ email and password
+
+If you don’t see "Mercury CO NZ" when searching, the integration may not be loaded: ensure it’s installed (e.g. via HACS), restart Home Assistant.
 
 ### 2. Add Chart Card
 
@@ -237,19 +243,39 @@ cd home-assistant-mercury-co-nz
 pip install -r requirements_dev.txt
 ```
 
-### Deployment Script
+### Local testing (no git push)
 
-Use the included deployment script for easy testing:
+Deploy from your machine to Home Assistant without pushing to the repo:
+
+**Same machine (Docker):**
 
 ```bash
 ./deploy.sh
 ```
 
-This script:
+**Same machine (config path):**
 
-- Detects Docker vs direct installation
-- Copies files to appropriate locations
-- Provides configuration examples
+```bash
+HA_CONFIG_PATH=/path/to/your/config ./deploy.sh
+# e.g. HA_CONFIG_PATH=~/.homeassistant ./deploy.sh
+```
+
+**Home Assistant on another host (e.g. 192.168.4.46):**
+
+```bash
+REMOTE_HOST=192.168.4.46 REMOTE_USER=root ./deploy.sh
+# Or with a different user/path:
+REMOTE_HOST=192.168.4.46 REMOTE_USER=pi REMOTE_PATH=/home/pi/.homeassistant ./deploy.sh
+```
+
+Uses `rsync` for remote/local-path so only changed files are copied. After deploy:
+
+1. **Settings → Devices & services → Mercury CO NZ → ⋮ → Reload** (or restart HA).
+2. Test: `http://YOUR_HA_IP:8123/api/mercury_co_nz/energy-usage-card.js`
+
+### Deployment Script (summary)
+
+The script detects Docker vs direct path vs remote host and copies/syncs the integration files accordingly.
 
 ### File Structure
 
@@ -294,23 +320,36 @@ custom_components/mercury_co_nz/
 
 ## 🐛 Troubleshooting
 
-### Chart Not Loading
+### Card not found (404 or "Custom element doesn't exist")
 
-1. Check browser console for JavaScript errors
-2. Verify entity exists and has data
-3. Hard refresh browser (Ctrl+F5 / Cmd+Shift+R)
+Add the integration first (Settings → Devices & services → Add integration → "Mercury CO NZ"). Card URLs are only available when the integration is loaded. If you use **Lovelace YAML mode**, add the card resources to `ui-lovelace.yaml`:
 
-### Navigation Not Working
+```yaml
+resources:
+  - url: /api/mercury_co_nz/energy-usage-card.js
+    type: module
+  - url: /api/mercury_co_nz/energy-weekly-summary-card.js
+    type: module
+  - url: /api/mercury_co_nz/energy-monthly-summary-card.js
+    type: module
+```
 
-1. Ensure ` in configuration
-2. Verify sufficient historical data exists
-3. Check Home Assistant logs for errors
+### "Account already set up" when adding
 
-### Data Not Updating
+If you see this step, enter your password and submit. The integration will remove the old entry and add a fresh one so sensors are created. The integration appears on the main **Settings → Devices & services** page. Entity IDs (e.g. `sensor.mercury_nz_energy_usage`) are in **Developer Tools → States** (search `mercury`).
 
-1. Check Mercury Energy API credentials
-2. Verify internet connectivity
-3. Restart Home Assistant integration
+### Updating credentials
+
+**Settings → Devices & services** → find **Mercury NZ** on the main page → ⋮ → **Configure** → enter new email/password. The integration reloads with the new credentials.
+
+### Chart shows "Waiting for Entity..." or no data
+
+Confirm the entity exists: **Developer Tools → States** → search `mercury`. Use the exact `entity_id` in your card (e.g. `sensor.mercury_nz_energy_usage`). If the sensor is unavailable, update credentials (see above) or check **Settings → System → Logs** for API errors.
+
+### Other issues
+
+- **Chart not loading:** Check browser console (F12), verify entity has data, hard refresh (Ctrl+F5 / Cmd+Shift+R).
+- **Data not updating:** Check credentials and internet; reload the integration or restart Home Assistant.
 
 ## 📜 License
 

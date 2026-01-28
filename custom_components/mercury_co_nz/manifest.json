@@ -3,7 +3,7 @@
   "name": "Mercury CO NZ",
   "codeowners": ["@bkintanar"],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["frontend", "http"],
   "documentation": "https://github.com/bkintanar/home-assistant-mercury-co-nz",
   "integration_type": "hub",
   "iot_class": "cloud_polling",

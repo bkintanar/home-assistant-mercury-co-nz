@@ -650,7 +650,7 @@ class MercuryAPI:
                 customer_id, account_id, service_id,
                 "monthly_usage", "monthly_usage_history",
                 "Getting monthly electricity usage for extended history...",
-                "Monthly usage: %.2f kWh (%d monthly billing periods)",
+                "Monthly usage: %.2f kWh (%d data points, %d monthly billing periods)",
                 "Could not get monthly usage: %s"
             )
             normalized_data.update(monthly_result)

@@ -36,6 +36,11 @@ async def async_setup_entry(
         )
 
     async_add_entities(entities)
+    # Main chart entity: sensor.mercury_nz_energy_usage (from name "Mercury NZ Energy Usage")
+    _LOGGER.info(
+        "Added %d Mercury sensors; primary chart entity is sensor.mercury_nz_energy_usage",
+        len(entities),
+    )
 
 
 class MercurySensor(CoordinatorEntity, SensorEntity):
