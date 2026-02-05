@@ -12,6 +12,23 @@ from ..const import JSMODULES, URL_BASE
 _LOGGER = logging.getLogger(__name__)
 
 
+def _lovelace_resource_mode(lovelace) -> str:
+    """Get Lovelace resource mode, compatible with all HA versions.
+
+    - HA 2025+: LovelaceData has .resource_mode
+    - Older HA: object had .mode
+    - Fallback: dict with "resource_mode" or "mode" key, or default "storage"
+    """
+    if lovelace is None:
+        return "storage"
+    mode = getattr(lovelace, "resource_mode", None) or getattr(lovelace, "mode", None)
+    if mode is not None:
+        return mode
+    if isinstance(lovelace, dict):
+        return lovelace.get("resource_mode") or lovelace.get("mode") or "storage"
+    return "storage"
+
+
 class LovelaceResourceRegistration:
     """Registers Mercury card JavaScript modules as Lovelace resources."""
 
@@ -25,10 +42,11 @@ class LovelaceResourceRegistration:
         if self.lovelace is None:
             _LOGGER.debug("Lovelace not loaded yet, skipping resource registration")
             return
-        if self.lovelace.mode != "storage":
+        resource_mode = _lovelace_resource_mode(self.lovelace)
+        if resource_mode != "storage":
             _LOGGER.debug(
-                "Lovelace mode is %s; resources only auto-register in storage mode",
-                self.lovelace.mode,
+                "Lovelace resource mode is %s; resources only auto-register in storage mode",
+                resource_mode,
             )
             return
         await self._async_wait_for_lovelace_resources()
