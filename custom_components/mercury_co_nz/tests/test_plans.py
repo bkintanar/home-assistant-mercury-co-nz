@@ -33,15 +33,18 @@ def _ns(**kwargs) -> SimpleNamespace:
     return SimpleNamespace(**kwargs)
 
 
-def test_normalize_converts_anytime_rate_cents_to_nzd() -> None:
-    """27.5 NZ cents/kWh -> 0.275 NZD/kWh."""
-    out = _api()._normalize_plans_data(_ns(anytime_rate=27.5))
+def test_normalize_anytime_rate_cents_form_with_measure() -> None:
+    """Defensive: if Mercury ever serves cents form ('27.5' with measure='c/kWh'),
+    the helper detects 'c' in the measure and divides by 100."""
+    out = _api()._normalize_plans_data(
+        _ns(anytime_rate="27.5", anytime_rate_measure="c/kWh")
+    )
     assert out["anytime_rate"] == 0.275
 
 
-def test_normalize_converts_daily_fixed_charge_cents_to_nzd() -> None:
-    """137.0 NZ cents/day -> 1.37 NZD/day."""
-    out = _api()._normalize_plans_data(_ns(daily_fixed_charge=137.0))
+def test_normalize_daily_fixed_charge_dollar_string() -> None:
+    """Mercury's actual format: '$1.37' string in dollars-per-day."""
+    out = _api()._normalize_plans_data(_ns(daily_fixed_charge="$1.37"))
     assert out["daily_fixed_charge"] == 1.37
 
 
@@ -78,9 +81,10 @@ def test_normalize_handles_dict_input() -> None:
     """If pymercury hands us a plain dict, the third fallback branch handles it.
 
     A plain `dict` has no instance `__dict__` and no `to_dict()` method, so
-    the helper falls through to `plans_dict = plans_data`.
+    the helper falls through to `plans_dict = plans_data`. Use Mercury's actual
+    string format ('$0.30').
     """
-    raw = {"anytime_rate": 30.0, "current_plan_name": "Low User"}
+    raw = {"anytime_rate": "$0.30", "current_plan_name": "Low User"}
     out = _api()._normalize_plans_data(raw)
     assert out["anytime_rate"] == 0.3
     assert out["current_plan_name"] == "Low User"
@@ -93,16 +97,19 @@ def test_normalize_returns_empty_on_none_input() -> None:
 
 
 def test_normalize_full_record_round_trip() -> None:
-    """Sanity check on a realistic input — every field present."""
+    """Sanity check on a realistic Mercury record — every field present.
+
+    Uses Mercury's actual string format ('$X.XXXX') for the rate fields.
+    """
     plans = _ns(
-        anytime_rate=29.95,
-        daily_fixed_charge=149.0,
+        anytime_rate="$0.2995",
+        daily_fixed_charge="$1.49",
         current_plan_id="ANYTIME_2024",
         current_plan_name="Anytime",
         current_plan_description="Best for anytime users",
         current_plan_usage_type="Standard",
         icp_number="0000123456ABC78",
-        anytime_rate_measure="c/kWh",
+        anytime_rate_measure="$/kWh",
         plan_change_date="",
         can_change_plan=True,
         is_pending_plan_change=False,
@@ -113,7 +120,7 @@ def test_normalize_full_record_round_trip() -> None:
     assert out["current_plan_id"] == "ANYTIME_2024"
     assert out["current_plan_name"] == "Anytime"
     assert out["icp_number"] == "0000123456ABC78"
-    assert out["anytime_rate_measure"] == "c/kWh"
+    assert out["anytime_rate_measure"] == "$/kWh"
     assert out["can_change_plan"] == "yes"
     assert out["is_pending_plan_change"] == "no"
 
@@ -251,3 +258,70 @@ async def test_get_electricity_plans_returns_empty_when_pymercury_returns_none(
         and "(A) get_services empty / no match" in m
         for m in msgs
     ), f"failure-mode hint not found in WARNING logs: {msgs}"
+
+
+# ----------------------------------------------------------------------------
+# v1.2.2 — _parse_rate_amount helper tests + regression for '$0.2737' bug
+# ----------------------------------------------------------------------------
+
+
+def test_parse_rate_amount_dollar_string() -> None:
+    """The actual format Mercury returns: '$0.2737' → 0.2737."""
+    assert MercuryAPI._parse_rate_amount("$0.2737", "$/kWh") == 0.2737
+
+
+def test_parse_rate_amount_dollar_with_thousands_separator() -> None:
+    """Defensive: '$1,234.56' → 1234.56."""
+    assert MercuryAPI._parse_rate_amount("$1,234.56", "$/day") == 1234.56
+
+
+def test_parse_rate_amount_cents_with_c_suffix() -> None:
+    """Defensive: if Mercury ever serves '27.5c' with measure='c/kWh' → 0.275 NZD."""
+    assert MercuryAPI._parse_rate_amount("27.5c", "c/kWh") == 0.275
+
+
+def test_parse_rate_amount_cents_with_explicit_measure() -> None:
+    """A bare numeric '27.5' string with measure='c/kWh' is interpreted as cents → 0.275 NZD."""
+    assert MercuryAPI._parse_rate_amount("27.5", "c/kWh") == 0.275
+
+
+def test_parse_rate_amount_numeric_dollars_passthrough() -> None:
+    """A bare float (no measure) is treated as already canonical dollars."""
+    assert MercuryAPI._parse_rate_amount(0.2737, None) == 0.2737
+
+
+def test_parse_rate_amount_returns_none_for_none() -> None:
+    assert MercuryAPI._parse_rate_amount(None, "$/kWh") is None
+
+
+def test_parse_rate_amount_returns_none_for_unparseable(caplog) -> None:
+    """Malformed input → None + WARNING log."""
+    with caplog.at_level(logging.WARNING):
+        result = MercuryAPI._parse_rate_amount("not a number", "$/kWh")
+    assert result is None
+    assert any("could not parse rate" in r.getMessage() for r in caplog.records)
+
+
+def test_parse_rate_amount_zero_is_preserved() -> None:
+    """Free-power period (0.0) must NOT become None."""
+    assert MercuryAPI._parse_rate_amount("$0.00", "$/kWh") == 0.0
+    assert MercuryAPI._parse_rate_amount(0, "$/kWh") == 0.0
+
+
+def test_normalize_handles_dollar_string_anytime_rate() -> None:
+    """Regression test for the bug from issue #6 logs.
+
+    Verifies that Mercury's actual `'$0.2737'` format does NOT raise ValueError
+    inside `_normalize_plans_data` and produces the correct float.
+    """
+    plans = _ns(
+        anytime_rate="$0.2737",
+        anytime_rate_measure="$/kWh",
+        daily_fixed_charge="$1.49",
+        current_plan_name="Anytime",
+    )
+    out = _api()._normalize_plans_data(plans)
+    assert out != {}, "normalize must not return empty dict for valid input"
+    assert out["anytime_rate"] == 0.2737
+    assert out["daily_fixed_charge"] == 1.49
+    assert out["current_plan_name"] == "Anytime"

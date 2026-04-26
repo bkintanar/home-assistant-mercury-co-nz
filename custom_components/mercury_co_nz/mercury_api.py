@@ -563,14 +563,67 @@ class MercuryAPI:
             _LOGGER.error("Error fetching electricity plans: %s", exc, exc_info=True)
             return {}
 
+    @staticmethod
+    def _parse_rate_amount(value: Any, measure: str | None = None) -> float | None:
+        """Parse a Mercury rate value into a float in NZD per the unit (kWh/day).
+
+        Mercury's /electricity/plans endpoint returns rates as DISPLAY-FORMATTED
+        strings with a currency prefix — e.g. ``'$0.2737'`` for dollars-per-kWh,
+        or ``'27.37c'`` if Mercury ever serves a cents-form (defensive). Other
+        endpoints (bill, weekly, monthly) return numeric values, so this helper
+        lives only in the plans-data normalization path.
+
+        Args:
+            value: Mercury's rate value (string, int, float, or None).
+            measure: The companion rate_measure string (e.g. ``'$/kWh'``,
+                ``'c/kWh'``, or empty). Used to decide cents-to-dollars.
+
+        Returns:
+            Float in NZD per (kWh / day) — i.e. dollars, never cents.
+            ``None`` if the input is missing or unparseable.
+        """
+        if value is None:
+            return None
+
+        # If pymercury ever returns a numeric type, treat it as already
+        # canonical dollars. The current Mercury API delivers strings; this
+        # branch is defensive for future format changes.
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+        else:
+            # Strip currency prefix/suffix and thousands separator.
+            cleaned = (
+                str(value)
+                .strip()
+                .replace("$", "")
+                .replace(",", "")
+                .rstrip("c")
+            )
+            try:
+                numeric = float(cleaned)
+            except ValueError:
+                _LOGGER.warning(
+                    "Mercury plans: could not parse rate %r (measure=%r); returning None",
+                    value, measure,
+                )
+                return None
+
+        # Cents -> dollars only if the measure explicitly says cents. Mercury
+        # actually returns dollars (verified by user runtime data); the cents
+        # branch is defensive for future format variation.
+        if measure and "c" in measure.lower() and "$" not in measure:
+            numeric = numeric / 100.0
+
+        return round(numeric, 6)
+
     def _normalize_plans_data(self, plans_data: Any) -> dict[str, Any]:
         """Normalize ElectricityPlans data to a flat dict.
 
-        CRITICAL: Mercury's anytime_rate and daily_fixed_charge are in NZ CENTS.
-        We divide by 100 here so the resulting sensor exposes NZD/kWh. HACS
-        dynamic_energy_cost parses only the /kWh denominator and labels output
-        with hass.config.currency — exposing raw cents would silently produce
-        100x wrong cost values.
+        Mercury's /electricity/plans endpoint serves rates as DISPLAY-FORMATTED
+        strings — typically '$0.2737' (dollars-per-kWh) for anytime_rate and
+        '$X.XX' for daily_fixed_charge. The `_parse_rate_amount` helper handles
+        the string -> float conversion and uses the rate_measure field to
+        disambiguate cents/dollars defensively.
         """
         if not plans_data:
             return {}
@@ -584,15 +637,16 @@ class MercuryAPI:
             else:
                 plans_dict = plans_data
 
-            # Cents -> NZD conversion. `is not None` (not truthy) preserves a
-            # legitimate 0.0 rate (free-power period) instead of dropping it.
-            anytime_cents = plans_dict.get("anytime_rate")
-            daily_cents = plans_dict.get("daily_fixed_charge")
+            anytime_raw = plans_dict.get("anytime_rate")
+            daily_raw = plans_dict.get("daily_fixed_charge")
+            anytime_measure = plans_dict.get("anytime_rate_measure")
+            # Mercury doesn't expose a separate measure for daily_fixed_charge
+            # in pymercury's model; it's per-day in dollars. Pass None.
 
             normalized = {
                 # Numeric (NZD)
-                "anytime_rate": round(float(anytime_cents) / 100.0, 6) if anytime_cents is not None else None,
-                "daily_fixed_charge": round(float(daily_cents) / 100.0, 6) if daily_cents is not None else None,
+                "anytime_rate": self._parse_rate_amount(anytime_raw, anytime_measure),
+                "daily_fixed_charge": self._parse_rate_amount(daily_raw, None),
                 # Text
                 "current_plan_id": plans_dict.get("current_plan_id") or "",
                 "current_plan_name": plans_dict.get("current_plan_name") or "",
