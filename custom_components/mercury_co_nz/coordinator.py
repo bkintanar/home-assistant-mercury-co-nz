@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import DOMAIN, CONF_EMAIL
 from .mercury_api import MercuryAPI
+from .statistics import MercuryStatisticsImporter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             config[CONF_EMAIL],
             config[CONF_PASSWORD],
         )
+        self._statistics = MercuryStatisticsImporter(hass, config[CONF_EMAIL])
 
         super().__init__(
             hass,
@@ -152,6 +154,24 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                     first_datetime = extended_hourly_data['extended_hourly_usage_history'][0].get('datetime', 'Unknown')
                     last_datetime = extended_hourly_data['extended_hourly_usage_history'][-1].get('datetime', 'Unknown')
                     _LOGGER.info("🕐 Hourly data range: %s to %s", first_datetime, last_datetime)
+
+            # Energy Dashboard integration — import historical statistics.
+            # This block is INSIDE the existing outer try/except that wraps the whole
+            # _async_update_data body (above) and converts unhandled exceptions to
+            # UpdateFailed. We catch here at ERROR level so that:
+            #   (1) a buggy importer must NOT mark the entire coordinator update as
+            #       failed (sensors would briefly show as unavailable), AND
+            #   (2) tracebacks DO reach HA logs via exc_info=True so bugs are findable.
+            # The importer's own try/except only catches recorder-not-ready (KeyError /
+            # RuntimeError from get_instance); logic errors propagate to THIS catch.
+            try:
+                await self._statistics.async_update(combined_data)
+            except Exception as exc:  # pylint: disable=broad-except
+                _LOGGER.error(
+                    "Mercury statistics import failed (Energy Dashboard data will be stale): %s",
+                    exc,
+                    exc_info=True,
+                )
 
             return combined_data
         except Exception as exception:

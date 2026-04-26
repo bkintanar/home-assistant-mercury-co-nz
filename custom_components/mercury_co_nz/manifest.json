@@ -7,7 +7,8 @@
   "documentation": "https://github.com/bkintanar/home-assistant-mercury-co-nz",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
-  "requirements": ["aiohttp>=3.8.0", "mercury-co-nz-api>=1.0.2"],
+  "requirements": ["aiohttp>=3.8.0", "mercury-co-nz-api>=1.1.0"],
   "frontend": true,
-  "version": "1.0.0"
+  "min_ha_version": "2025.11.0",
+  "version": "1.1.0"
 }

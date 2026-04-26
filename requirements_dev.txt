@@ -1,12 +1,12 @@
 # Development requirements for Mercury Energy NZ integration
 
 # Home Assistant
-homeassistant>=2023.1.0
+homeassistant>=2025.11.0
 
 # Core dependencies
 aiohttp>=3.8.0
 voluptuous>=0.13.0
-mercury-co-nz-api>=1.0.2
+mercury-co-nz-api>=1.1.0
 
 # Development tools
 black>=22.0.0
