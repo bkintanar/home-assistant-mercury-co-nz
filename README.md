@@ -358,6 +358,33 @@ custom_components/mercury_co_nz/
 2. Verify internet connectivity
 3. Restart Home Assistant integration
 
+### Unit Warnings After Upgrading to v1.2.3 or Later
+
+If you see warnings like:
+
+```
+The unit of sensor.mercury_nz_current_bill_7_days is changing, got multiple {None, '$'}
+The unit of sensor.mercury_nz_total_usage_7_days (None) cannot be converted to the unit of previously compiled statistics (kWh)
+The unit of sensor.mercury_nz_energy_usage (None) cannot be converted to the unit of previously compiled statistics (kWh)
+```
+
+…after upgrading to v1.2.3+, this is **expected residue** from prior versions where state attributes
+exceeded HA's 16 KB cap and `unit_of_measurement` was being dropped from the recorder. v1.2.3 fixed the
+upstream cause but stale state rows remain in HA's recorder DB until they age out (default ~10 days).
+
+**Quick fix** (one-time):
+
+1. Open **Developer Tools → Statistics** in Home Assistant.
+2. Find each affected entity (typically: `sensor.mercury_nz_energy_usage`,
+   `sensor.mercury_nz_total_usage_7_days`, `sensor.mercury_nz_current_bill_7_days`).
+3. Click **"Fix Issue"** next to each.
+4. Choose **"Update the unit"**.
+
+The warnings disappear immediately. This does NOT delete your sensor history or the Energy Dashboard
+statistics — those use a separate `mercury_co_nz:*` namespace and are unaffected.
+
+Alternatively, the warnings will resolve on their own once the stale state rows age out of HA's recorder.
+
 ## 📜 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

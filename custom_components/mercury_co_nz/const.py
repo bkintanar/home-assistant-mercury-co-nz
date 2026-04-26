@@ -36,7 +36,11 @@ SENSOR_TYPES = {
         "unit": "kWh",
         "icon": "mdi:lightning-bolt",
         "device_class": "energy",
-        "state_class": "total_increasing",
+        # state_class=total (not total_increasing): Mercury reports a windowed sum
+        # over the trailing 7 days. When the window rolls forward the value can
+        # decrease, which violates total_increasing's monotonic contract and
+        # corrupts long-term-stat accumulators.
+        "state_class": "total",
     },
     "energy_usage": {
         "name": "Energy Usage",
@@ -92,14 +96,16 @@ SENSOR_TYPES = {
         "unit": "kWh",
         "icon": "mdi:clock-outline",
         "device_class": "energy",
-        "state_class": "total_increasing",
+        # state_class=total — windowed sum over trailing 7 days, see total_usage above.
+        "state_class": "total",
     },
     "monthly_usage": {
         "name": "Monthly Usage (2 months)",
         "unit": "kWh",
         "icon": "mdi:calendar-month",
         "device_class": "energy",
-        "state_class": "total_increasing",
+        # state_class=total — windowed sum over trailing 2 months, see total_usage above.
+        "state_class": "total",
     },
     # Bill Summary Sensors
     "bill_account_id": {
