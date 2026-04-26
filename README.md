@@ -70,6 +70,30 @@ name: Monthly Summary
 - **Smart Date Ranges**: When limited data available, shows shifted date ranges for meaningful navigation
 - **Tooltip Management**: Automatically hides tooltips during navigation
 
+## 🔋 Energy Dashboard Integration
+
+The integration writes two long-term statistics on every coordinator update so Mercury data appears in the Home Assistant Energy Dashboard:
+
+- `mercury_co_nz:<id>_energy_consumption` (kWh) — picker label: `Mercury <id> consumption`
+- `mercury_co_nz:<id>_energy_cost` (NZD) — picker label: `Mercury <id> cost`
+
+`<id>` is your Mercury account ID with dashes/dots replaced by underscores. Until your bill summary is fetched (typically within ~5 minutes of integration setup), a temporary email-hash-based ID is used. **Do NOT add the temporary ID to the Energy Dashboard** — wait until the account-id-based ID appears.
+
+Up to **180 days of historical data** are backfilled on first install (from the integration's persisted JSON cache). Mercury delivers data with a ~2-day lag, so the trailing edge of Energy Dashboard graphs will always be 2 days behind real time.
+
+### Steps to enable
+
+1. Open **Settings → Dashboards → Energy**.
+2. Under **Electricity grid**, click **Add consumption**. Pick the `mercury_co_nz:...` consumption statistic.
+3. Tick **Use an entity tracking the total costs**. Pick the `mercury_co_nz:...` cost statistic.
+4. (Optional but recommended) Set `homeassistant.currency: NZD` in `configuration.yaml` and restart, otherwise the dashboard cost labels may show `$` instead of `NZ$`.
+
+### Notes
+
+- Mercury provides daily-resolution data only; the integration spreads each daily total across 23/24/25 hourly bins (DST-aware) so the dashboard hourly view shows a smooth profile rather than a single midnight spike.
+- Mercury bill corrections within the trailing 3 days are absorbed automatically (recent days are re-imported on every poll).
+- If you previously set up template-sensor + utility_meter workarounds for the Energy Dashboard, you can remove them after enabling these statistics.
+
 ## 🚀 Installation
 
 ### Option 1: HACS (Recommended)
@@ -128,7 +152,7 @@ name: Energy Usage Charts
 
 ## 📋 Requirements
 
-- Home Assistant 2023.1 or newer
+- Home Assistant **2025.11** or newer (the Energy Dashboard integration uses the `unit_class` field on `StatisticMetaData`, which shipped in HA 2025.11)
 - Mercury Energy New Zealand account
 - Active internet connection for data retrieval
 

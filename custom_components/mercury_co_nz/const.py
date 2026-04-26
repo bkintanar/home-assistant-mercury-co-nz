@@ -279,3 +279,12 @@ DECIMAL_PLACES = 2
 TEMP_DECIMAL_PLACES = 1
 FALLBACK_ZERO = 0
 FALLBACK_EMPTY_LIST = []
+
+# Statistics (Energy Dashboard integration)
+STATISTICS_ENERGY_SUFFIX: Final[str] = "energy_consumption"
+STATISTICS_COST_SUFFIX: Final[str] = "energy_cost"
+NZ_TIMEZONE: Final[str] = "Pacific/Auckland"
+STATISTICS_BACKFILL_DAYS: Final[int] = 180  # matches the daily JSON retention cap
+STATISTICS_REIMPORT_DAYS: Final[int] = 3  # always re-import last N days to absorb Mercury bill corrections
+STATISTICS_FAILURE_NOTIFICATION_THRESHOLD: Final[int] = 3  # consecutive failures before user-visible notification
+STATISTICS_FAILURE_BACKOFF_THRESHOLD: Final[int] = 12  # consecutive failures (≈1 hour) before stopping retries
