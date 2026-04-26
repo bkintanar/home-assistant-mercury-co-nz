@@ -478,6 +478,51 @@ class MercuryAPI:
 
             service_id = electricity_service.service_id
 
+            # Diagnostic pre-check (issue #6 follow-up).
+            # pymercury's get_electricity_plans silently returns None on three
+            # internal failure paths: (A) get_services no match, (B) identifier
+            # missing, (C) HTTP non-200. pymercury's own _log only print()s when
+            # verbose=True, so HA never captures its diagnostics. These two INFO
+            # lines surface the same data so the user can see which mode fired.
+            icp_from_complete_data = None
+            try:
+                if hasattr(electricity_service, 'raw_data'):
+                    icp_from_complete_data = electricity_service.raw_data.get('identifier')
+            except Exception:  # pylint: disable=broad-except
+                pass
+            _LOGGER.info(
+                "Mercury plans diagnostic: service_id=%s, service_group=%s, identifier-from-complete_data=%r",
+                service_id,
+                getattr(electricity_service, 'service_group', '?'),
+                icp_from_complete_data,
+            )
+
+            try:
+                services_for_plans = await loop.run_in_executor(
+                    None,
+                    lambda: self._client._api_client.get_services(customer_id, account_id),
+                )
+                matching = next(
+                    (s for s in (services_for_plans or [])
+                     if s.service_id == service_id
+                     and s.service_group.lower() == 'electricity'),
+                    None,
+                )
+                icp_from_get_services = (
+                    matching.raw_data.get('identifier') if matching else None
+                )
+                _LOGGER.info(
+                    "Mercury plans diagnostic: get_services returned %d service(s); matched-for-our-service_id=%s; identifier-from-get_services=%r",
+                    len(services_for_plans or []),
+                    bool(matching),
+                    icp_from_get_services,
+                )
+            except Exception as diag_err:  # pylint: disable=broad-except
+                _LOGGER.warning(
+                    "Mercury plans diagnostic: get_services pre-check failed: %s",
+                    diag_err,
+                )
+
             # Try to get plans using pymercury
             try:
                 if hasattr(self._client, '_api_client') and hasattr(self._client._api_client, 'get_electricity_plans'):
@@ -493,7 +538,11 @@ class MercuryAPI:
                 return {}
 
             if not plans:
-                _LOGGER.warning("No electricity plans data returned")
+                _LOGGER.warning(
+                    "No electricity plans data returned. The diagnostic INFO lines above "
+                    "show the failure mode: (A) get_services empty / no match, (B) identifier missing, "
+                    "or (C) electricity_plans HTTP non-200."
+                )
                 return {}
 
             _LOGGER.info("Successfully retrieved electricity plans")
