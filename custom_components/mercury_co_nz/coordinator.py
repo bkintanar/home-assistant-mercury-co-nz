@@ -120,6 +120,15 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                 # Add electricity plan data with prefix (issue #6)
                 for key, value in plans_data.items():
                     combined_data[f"plan_{key}"] = value
+                _LOGGER.info(
+                    "Mercury CO NZ: plan_* keys merged into coordinator data: %s",
+                    sorted(k for k in combined_data if k.startswith("plan_")),
+                )
+            else:
+                _LOGGER.warning(
+                    "Mercury CO NZ: get_electricity_plans returned empty/falsy data; "
+                    "all plan_* sensors will report None this cycle"
+                )
 
             _LOGGER.info("Mercury coordinator: Combined data keys: %s", list(combined_data.keys()))
             _LOGGER.debug("Mercury coordinator: Sample data values: %s", {k: v for k, v in list(combined_data.items())[:5]})

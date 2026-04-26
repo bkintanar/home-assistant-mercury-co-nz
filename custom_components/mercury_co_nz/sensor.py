@@ -48,6 +48,12 @@ async def async_setup_entry(
         "Added %d Mercury sensors; primary chart entity is sensor.mercury_nz_energy_usage",
         len(entities),
     )
+    # Diagnostic — surfaces which sensor_types the integration tried to register so
+    # users investigating "missing sensor" reports can confirm registration happened.
+    _LOGGER.info(
+        "Mercury CO NZ: registered sensor_types: %s",
+        sorted(e._sensor_type for e in entities),
+    )
 
 
 class MercurySensor(CoordinatorEntity, SensorEntity):
