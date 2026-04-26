@@ -1,14 +1,24 @@
-"""Unit tests for `MercuryAPI._normalize_plans_data` (issue #6).
+"""Unit tests for `MercuryAPI._normalize_plans_data` and the get_electricity_plans
+diagnostic logging (issue #6).
 
-These tests guard the cents-to-NZD conversion. If they fail because someone
-removed the `/100.0` divisor, HACS dynamic_energy_cost would silently produce
-costs that are 100x too high.
+The normalization tests guard the cents-to-NZD conversion. If they fail because
+someone removed the `/100.0` divisor, HACS dynamic_energy_cost would silently
+produce costs that are 100x too high.
+
+The diagnostic-logging tests guard the v1.2.1 diagnostic INFO lines that surface
+which of pymercury's three internal failure paths (A/B/C) fired when
+get_electricity_plans returns None. Without these logs, the user has no way
+to distinguish failure modes.
 """
 
 # pylint: disable=protected-access
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from custom_components.mercury_co_nz.mercury_api import MercuryAPI
 
@@ -106,3 +116,138 @@ def test_normalize_full_record_round_trip() -> None:
     assert out["anytime_rate_measure"] == "c/kWh"
     assert out["can_change_plan"] == "yes"
     assert out["is_pending_plan_change"] == "no"
+
+
+# ----------------------------------------------------------------------------
+# v1.2.1 — Diagnostic logging tests for get_electricity_plans (issue #6 follow-up)
+# ----------------------------------------------------------------------------
+
+
+def _build_get_electricity_plans_fixture(
+    *,
+    plans_return,
+    services_return,
+    complete_data_identifier=None,
+    service_id="SVC123",
+):
+    """Construct a MercuryAPI instance + mocks for get_electricity_plans.
+
+    The returned tuple is `(api, complete_data_mock, services_mock)` so tests
+    can configure return values for both pymercury internal calls
+    (`get_complete_account_data` and `_api_client.get_services`) plus the
+    plans call itself.
+    """
+    api = _api()
+    api._authenticated = True
+
+    elec_service = MagicMock()
+    elec_service.is_electricity = True
+    elec_service.service_id = service_id
+    elec_service.service_group = "electricity"
+    elec_service.raw_data = {"identifier": complete_data_identifier}
+
+    complete_data = MagicMock()
+    complete_data.customer_id = "CUST1"
+    complete_data.account_ids = ["ACC1"]
+    complete_data.services = [elec_service]
+
+    api_client_mock = MagicMock()
+    api_client_mock.get_electricity_plans = MagicMock(return_value=plans_return)
+    api_client_mock.get_services = MagicMock(return_value=services_return)
+
+    client_mock = MagicMock()
+    client_mock.get_complete_account_data = MagicMock(return_value=complete_data)
+    client_mock._api_client = api_client_mock
+
+    api._client = client_mock
+    return api
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_logs_emit_complete_data_identifier(caplog) -> None:
+    """The first diagnostic INFO line surfaces `identifier` from complete_data.services."""
+    api = _build_get_electricity_plans_fixture(
+        plans_return=None,
+        services_return=[],
+        complete_data_identifier="0000123456ABC78",
+        service_id="SVC123",
+    )
+    with caplog.at_level(logging.INFO):
+        result = await api.get_electricity_plans()
+
+    assert result == {}
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(
+        "service_id=SVC123" in m
+        and "identifier-from-complete_data='0000123456ABC78'" in m
+        for m in msgs
+    ), f"diagnostic log line not found in: {msgs}"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_logs_emit_get_services_result(caplog) -> None:
+    """The second diagnostic INFO line surfaces what pymercury's get_services returns."""
+    matching_service = MagicMock()
+    matching_service.service_id = "SVC123"
+    matching_service.service_group = "electricity"
+    matching_service.raw_data = {"identifier": "ICP_FROM_GETSERVICES"}
+
+    api = _build_get_electricity_plans_fixture(
+        plans_return=None,
+        services_return=[matching_service],
+        complete_data_identifier="ICP_FROM_COMPLETEDATA",
+        service_id="SVC123",
+    )
+    with caplog.at_level(logging.INFO):
+        result = await api.get_electricity_plans()
+
+    assert result == {}
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(
+        "get_services returned 1 service(s)" in m
+        and "matched-for-our-service_id=True" in m
+        and "identifier-from-get_services='ICP_FROM_GETSERVICES'" in m
+        for m in msgs
+    ), f"get_services diagnostic line not found in: {msgs}"
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_logs_distinguish_no_services(caplog) -> None:
+    """If get_services returns empty list, diagnostic shows '0 service(s)' / no match."""
+    api = _build_get_electricity_plans_fixture(
+        plans_return=None,
+        services_return=[],
+        complete_data_identifier="ANY",
+        service_id="SVC123",
+    )
+    with caplog.at_level(logging.INFO):
+        await api.get_electricity_plans()
+
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(
+        "get_services returned 0 service(s)" in m
+        and "matched-for-our-service_id=False" in m
+        for m in msgs
+    ), f"empty-services diagnostic not found in: {msgs}"
+
+
+@pytest.mark.asyncio
+async def test_get_electricity_plans_returns_empty_when_pymercury_returns_none(
+    caplog,
+) -> None:
+    """When pymercury silently returns None, wrapper returns {} and logs the failure-mode hint."""
+    api = _build_get_electricity_plans_fixture(
+        plans_return=None,
+        services_return=[],
+        complete_data_identifier=None,
+    )
+    with caplog.at_level(logging.WARNING):
+        result = await api.get_electricity_plans()
+
+    assert result == {}
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(
+        "No electricity plans data returned" in m
+        and "(A) get_services empty / no match" in m
+        for m in msgs
+    ), f"failure-mode hint not found in WARNING logs: {msgs}"
