@@ -259,27 +259,30 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
         # Full 180-day history is preserved in coordinator.data + the JSON
         # files for the statistics importer (Energy Dashboard).
         if self._sensor_type in CHART_DATA_SENSORS:
-            # Daily usage history — truncate to last CHART_ATTRIBUTE_DAILY_DAYS.
-            daily_source = self.coordinator.data.get(
-                "extended_daily_usage_history"
-            ) or self.coordinator.data.get("daily_usage_history")
+            # Daily usage history — explicit if/elif so data_source label is
+            # never mislabelled if extended key exists but holds an empty list.
+            daily_source = None
+            if self.coordinator.data.get("extended_daily_usage_history"):
+                daily_source = self.coordinator.data["extended_daily_usage_history"]
+                attributes["data_source"] = "mercury_energy_api_extended"
+                _LOGGER.debug(
+                    "Using extended daily usage history: %d days (truncating to last %d for attributes)",
+                    len(daily_source), CHART_ATTRIBUTE_DAILY_DAYS,
+                )
+            elif self.coordinator.data.get("daily_usage_history"):
+                daily_source = self.coordinator.data["daily_usage_history"]
+                attributes["data_source"] = "mercury_energy_api"
             if daily_source:
-                if "extended_daily_usage_history" in self.coordinator.data:
-                    attributes["data_source"] = "mercury_energy_api_extended"
-                    _LOGGER.debug(
-                        "Using extended daily usage history: %d days (truncating to last %d for attributes)",
-                        len(daily_source), CHART_ATTRIBUTE_DAILY_DAYS,
-                    )
-                else:
-                    attributes["data_source"] = "mercury_energy_api"
                 attributes["daily_usage_history"] = daily_source[-CHART_ATTRIBUTE_DAILY_DAYS:]
 
             # Temperature — drop `temperature_history` (unused by the card; verified
             # by grep — only `recent_temperatures` is consumed). Truncate the
             # simplified `recent_temperatures` to match daily window.
-            temp_source = self.coordinator.data.get(
-                "extended_temperature_history"
-            ) or self.coordinator.data.get("temperature_history")
+            temp_source = None
+            if self.coordinator.data.get("extended_temperature_history"):
+                temp_source = self.coordinator.data["extended_temperature_history"]
+            elif self.coordinator.data.get("temperature_history"):
+                temp_source = self.coordinator.data["temperature_history"]
             if temp_source:
                 truncated_temps = temp_source[-CHART_ATTRIBUTE_DAILY_DAYS:]
                 attributes["recent_temperatures"] = [
@@ -290,19 +293,19 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
                     for day in truncated_temps
                 ]
 
-            # Hourly usage history — truncate to last CHART_ATTRIBUTE_HOURLY_HOURS (~2 days).
-            hourly_source = self.coordinator.data.get(
-                "extended_hourly_usage_history"
-            ) or self.coordinator.data.get("hourly_usage_history")
+            # Hourly usage history — same explicit if/elif pattern as daily.
+            hourly_source = None
+            if self.coordinator.data.get("extended_hourly_usage_history"):
+                hourly_source = self.coordinator.data["extended_hourly_usage_history"]
+                attributes["data_source_hourly"] = "mercury_energy_api_extended"
+                _LOGGER.debug(
+                    "Using extended hourly usage history: %d hours (truncating to last %d for attributes)",
+                    len(hourly_source), CHART_ATTRIBUTE_HOURLY_HOURS,
+                )
+            elif self.coordinator.data.get("hourly_usage_history"):
+                hourly_source = self.coordinator.data["hourly_usage_history"]
+                attributes["data_source_hourly"] = "mercury_energy_api"
             if hourly_source:
-                if "extended_hourly_usage_history" in self.coordinator.data:
-                    attributes["data_source_hourly"] = "mercury_energy_api_extended"
-                    _LOGGER.debug(
-                        "Using extended hourly usage history: %d hours (truncating to last %d for attributes)",
-                        len(hourly_source), CHART_ATTRIBUTE_HOURLY_HOURS,
-                    )
-                else:
-                    attributes["data_source_hourly"] = "mercury_energy_api"
                 attributes["hourly_usage_history"] = hourly_source[-CHART_ATTRIBUTE_HOURLY_HOURS:]
 
             # Monthly usage history — small (~1KB), unchanged.
