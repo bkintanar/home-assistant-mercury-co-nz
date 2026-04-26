@@ -329,6 +329,10 @@ FALLBACK_EMPTY_LIST = []
 # Statistics (Energy Dashboard integration)
 STATISTICS_ENERGY_SUFFIX: Final[str] = "energy_consumption"
 STATISTICS_COST_SUFFIX: Final[str] = "energy_cost"
+# Gas suffixes (v1.4.0). Mercury's gas API only returns monthly aggregates;
+# we emit one StatisticData per invoice period.
+STATISTICS_GAS_CONSUMPTION_SUFFIX: Final[str] = "gas_consumption"
+STATISTICS_GAS_COST_SUFFIX: Final[str] = "gas_cost"
 NZ_TIMEZONE: Final[str] = "Pacific/Auckland"
 STATISTICS_BACKFILL_DAYS: Final[int] = 180  # matches the daily JSON retention cap
 STATISTICS_HOURLY_RETENTION_DAYS: Final[int] = 180  # hourly cache retention; matches daily cap so Energy Dashboard hourly profile spans the same window

@@ -35,7 +35,15 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             config[CONF_EMAIL],
             config[CONF_PASSWORD],
         )
+        self._email = config[CONF_EMAIL]
         self._statistics = MercuryStatisticsImporter(hass, config[CONF_EMAIL])
+
+        # Gas pipeline (v1.4.0) — lazily initialized on first cycle that detects a
+        # gas service in complete_data.services. Mercury's gas API only returns
+        # monthly aggregates, so the gas pipeline is much smaller than electricity:
+        # one fetch per cycle, no JSON cache, one StatisticData per invoice period.
+        self._gas_available: bool = False
+        self._gas_statistics: MercuryStatisticsImporter | None = None
 
         super().__init__(
             hass,
@@ -86,6 +94,34 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             usage_content_data = await self.api.get_usage_content()
             _LOGGER.info("Mercury coordinator: Received usage content data")
 
+            # Gas pipeline (v1.4.0) — lazy detection on first cycle, then fetch every cycle.
+            if not self._gas_available:
+                try:
+                    loop = asyncio.get_event_loop()
+                    complete_data = await loop.run_in_executor(
+                        None, self.api._client.get_complete_account_data
+                    )
+                    if complete_data and any(s.is_gas for s in complete_data.services):
+                        self._gas_available = True
+                        _LOGGER.info(
+                            "Mercury CO NZ: gas service detected; enabling gas statistics importer"
+                        )
+                        self._gas_statistics = MercuryStatisticsImporter(
+                            self.hass, self._email, fuel_type="gas"
+                        )
+                except Exception as exc:  # pylint: disable=broad-except
+                    _LOGGER.debug(
+                        "Gas availability check failed (will retry next cycle): %s", exc
+                    )
+
+            gas_data: dict[str, Any] | None = None
+            if self._gas_available:
+                try:
+                    gas_data = await self.api.get_gas_usage_data()
+                except Exception as exc:  # pylint: disable=broad-except
+                    _LOGGER.warning("Mercury gas usage fetch failed this cycle: %s", exc)
+                    gas_data = None
+
             _LOGGER.info("📋 Fetching electricity plans data...")
             plans_data = await self.api.get_electricity_plans()
             _LOGGER.info("Mercury coordinator: Received plans data")
@@ -128,6 +164,15 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning(
                     "Mercury CO NZ: get_electricity_plans returned empty/falsy data; "
                     "all plan_* sensors will report None this cycle"
+                )
+
+            if gas_data:
+                # Add gas data with prefix to avoid collision with electricity keys.
+                for key, value in gas_data.items():
+                    combined_data[f"gas_{key}"] = value
+                _LOGGER.info(
+                    "Mercury CO NZ: gas_* keys merged into coordinator data: %s",
+                    sorted(k for k in combined_data if k.startswith("gas_")),
                 )
 
             _LOGGER.info("Mercury coordinator: Combined data keys: %s", list(combined_data.keys()))
@@ -194,6 +239,16 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                     exc,
                     exc_info=True,
                 )
+
+            if self._gas_statistics is not None:
+                try:
+                    await self._gas_statistics.async_update(combined_data)
+                except Exception as exc:  # pylint: disable=broad-except
+                    _LOGGER.error(
+                        "Mercury gas statistics import failed (Energy Dashboard gas section will be stale): %s",
+                        exc,
+                        exc_info=True,
+                    )
 
             return combined_data
         except Exception as exception:
