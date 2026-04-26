@@ -488,8 +488,13 @@ class MercuryAPI:
             try:
                 if hasattr(electricity_service, 'raw_data'):
                     icp_from_complete_data = electricity_service.raw_data.get('identifier')
-            except Exception:  # pylint: disable=broad-except
-                pass
+            except Exception as raw_data_err:  # pylint: disable=broad-except
+                # raw_data may not be a dict (custom object without .get) —
+                # log at DEBUG so the failure isn't silently masked.
+                _LOGGER.debug(
+                    "Mercury plans diagnostic: failed to read raw_data.identifier: %s",
+                    raw_data_err,
+                )
             _LOGGER.info(
                 "Mercury plans diagnostic: service_id=%s, service_group=%s, identifier-from-complete_data=%r",
                 service_id,
