@@ -43,13 +43,18 @@ _STORE_VERSION = 1
 
 
 class MercuryStatisticsImporter:
-    """Push Mercury daily kWh + NZD costs into HA's long-term statistics table.
+    """Push Mercury kWh + NZD costs into HA's long-term statistics table.
 
-    Mercury's API delivers daily totals with a ~2-day delay. Live `total_increasing`
-    sensors would freeze for 48h producing zero-kWh bins followed by a spike — wrong
-    Energy Dashboard graphs. This class mirrors the Opower core integration's pattern:
-    push external statistics directly to the recorder, backfilling up to 180 days on
-    first run, re-importing the trailing few days each run to absorb bill corrections.
+    Mercury's API exposes per-hour and per-day data with a ~2-day lag. Live
+    `total_increasing` sensors would freeze for 48h producing zero-kWh bins
+    followed by a spike. This class mirrors the Opower core integration's
+    pattern: push external statistics directly to the recorder, backfilling
+    up to 180 days on first run, re-importing the trailing few days each
+    run to absorb bill corrections.
+
+    For each NZ-local day, real per-hour values from `extended_hourly_usage_history`
+    are emitted verbatim. Days not yet covered by the hourly cache fall back to
+    the daily total split evenly across 23/24/25 hours (DST-aware).
     """
 
     def __init__(self, hass: HomeAssistant, email: str) -> None:
@@ -148,25 +153,81 @@ class MercuryStatisticsImporter:
         return float(last_sum if last_sum is not None else 0.0), last_start
 
     @staticmethod
+    def _parse_hour_start_utc(record: dict[str, Any]) -> datetime | None:
+        """Parse the start-of-hour UTC datetime for an hourly record.
+
+        Hourly rows arrive with 'date'/'datetime' as a full ISO timestamp
+        (NZ-local with offset, e.g. 2026-04-25T14:00:00+12:00). Both keys
+        map to the same value for extended_hourly_usage_history rows
+        (coordinator.py:454-456); raw hourly_usage_history rows only have
+        'date'. Truncate to the hour boundary in UTC to align with the
+        daily-split slot grid so async_add_external_statistics upserts
+        cleanly when a slot was previously written by the daily path.
+        """
+        raw = record.get("datetime") or record.get("date")
+        if not isinstance(raw, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        utc = parsed.astimezone(timezone.utc)
+        return utc.replace(minute=0, second=0, microsecond=0)
+
+    @staticmethod
     def _build_hourly_entries(
-        records: list[dict[str, Any]],
+        daily_records: list[dict[str, Any]],
+        hourly_records: list[dict[str, Any]],
         energy_sum_start: float,
         cost_sum_start: float,
         cutoff_ts: float,
     ) -> tuple[list[StatisticData], list[StatisticData], int]:
-        """Split each daily record across 23/24/25 hourly StatisticData entries.
+        """Build hourly StatisticData entries, preferring real per-hour data.
 
-        Mercury delivers daily totals; the Energy Dashboard needs hourly statistics.
-        We split each daily kWh/cost evenly across the actual local-day hour count
-        (23 on NZDT-start, 25 on NZDT-end, 24 otherwise) so the dashboard hourly
-        view shows a smooth profile rather than a midnight spike + 23 zero hours.
+        Hourly records are consumed verbatim — one input row produces exactly
+        one output entry. Daily records are split across the actual NZ-local
+        hour count (23/24/25, DST-aware) ONLY for NZ-local days not already
+        covered by the hourly source. Sums are accumulated chronologically
+        across the merged set so the series is strictly monotonic regardless
+        of which source filled each bucket.
         """
         nz = ZoneInfo(NZ_TIMEZONE)
-        energy_stats: list[StatisticData] = []
-        cost_stats: list[StatisticData] = []
         null_skip_count = 0
+        # hour_start_utc -> (kwh, cost)
+        buckets: dict[datetime, tuple[float, float]] = {}
 
-        for record in records:
+        # 1. Hourly records first — real data wins.
+        for record in hourly_records or []:
+            hour_start = MercuryStatisticsImporter._parse_hour_start_utc(record)
+            if hour_start is None:
+                null_skip_count += 1
+                continue
+            consumption = record.get("consumption")
+            cost = record.get("cost")
+            # Note: extended_hourly_usage_history rows arrive with `cost`
+            # already normalised to 0.0 by the coordinator JSON cache when
+            # Mercury omits the field (coordinator.py:237). The None check
+            # here only fires for live `hourly_usage_history` rows passed
+            # directly from the API. Zero-cost hours ARE emitted as a real
+            # zero — verify via mercury_hourly.json after first deploy.
+            if consumption is None or cost is None:
+                null_skip_count += 1
+                continue
+            buckets[hour_start] = (float(consumption), float(cost))
+
+        # 2. NZ-local dates already covered by hourly — skip these days in the
+        #    daily-split pass to avoid double-filling.
+        hourly_covered_nz_dates: set[tuple[int, int, int]] = set()
+        for hour_start in buckets:
+            nz_local = hour_start.astimezone(nz)
+            hourly_covered_nz_dates.add(
+                (nz_local.year, nz_local.month, nz_local.day)
+            )
+
+        # 3. Daily records — fill uncovered NZ-local days via the 23/24/25 split.
+        for record in daily_records or []:
             consumption = record.get("consumption")
             cost = record.get("cost")
             if consumption is None or cost is None:
@@ -186,6 +247,10 @@ class MercuryStatisticsImporter:
                 null_skip_count += 1
                 continue
 
+            nz_date_key = (parsed_dt.year, parsed_dt.month, parsed_dt.day)
+            if nz_date_key in hourly_covered_nz_dates:
+                continue
+
             nz_midnight = datetime(
                 parsed_dt.year, parsed_dt.month, parsed_dt.day, tzinfo=nz
             )
@@ -193,7 +258,6 @@ class MercuryStatisticsImporter:
             current_utc = nz_midnight.astimezone(timezone.utc)
             end_utc = next_nz_midnight.astimezone(timezone.utc)
 
-            # First pass: count actual hours in this local day (23/24/25).
             hours_in_day = 0
             probe = current_utc
             while probe < end_utc:
@@ -206,28 +270,26 @@ class MercuryStatisticsImporter:
             hourly_kwh = float(consumption) / hours_in_day
             hourly_cost = float(cost) / hours_in_day
 
-            # Second pass: emit entries, skipping anything strictly before cutoff.
-            while current_utc < end_utc:
-                if current_utc.timestamp() < cutoff_ts:
-                    current_utc += timedelta(hours=1)
-                    continue
-                energy_sum_start += hourly_kwh
-                cost_sum_start += hourly_cost
-                energy_stats.append(
-                    StatisticData(
-                        start=current_utc,
-                        state=hourly_kwh,
-                        sum=energy_sum_start,
-                    )
-                )
-                cost_stats.append(
-                    StatisticData(
-                        start=current_utc,
-                        state=hourly_cost,
-                        sum=cost_sum_start,
-                    )
-                )
-                current_utc += timedelta(hours=1)
+            slot = current_utc
+            while slot < end_utc:
+                buckets.setdefault(slot, (hourly_kwh, hourly_cost))
+                slot += timedelta(hours=1)
+
+        # 4. Emit chronologically with cumulative sums; skip slots before cutoff.
+        energy_stats: list[StatisticData] = []
+        cost_stats: list[StatisticData] = []
+        for slot in sorted(buckets.keys()):
+            if slot.timestamp() < cutoff_ts:
+                continue
+            kwh, cost_value = buckets[slot]
+            energy_sum_start += kwh
+            cost_sum_start += cost_value
+            energy_stats.append(
+                StatisticData(start=slot, state=kwh, sum=energy_sum_start)
+            )
+            cost_stats.append(
+                StatisticData(start=slot, state=cost_value, sum=cost_sum_start)
+            )
 
         return energy_stats, cost_stats, null_skip_count
 
@@ -280,12 +342,21 @@ class MercuryStatisticsImporter:
             )
             self._currency_warning_emitted = True
 
-        # 3. Pull daily records (extended history preferred for backfill).
-        records = coordinator_data.get(
-            "extended_daily_usage_history"
-        ) or coordinator_data.get("daily_usage_history")
-        if not records:
-            _LOGGER.debug("Mercury statistics: no daily records available; skipping")
+        # 3. Pull daily records (extended history preferred for backfill) and
+        #    hourly records (real per-hour data, preferred over the daily split
+        #    for any NZ-local day they cover).
+        daily_records = (
+            coordinator_data.get("extended_daily_usage_history")
+            or coordinator_data.get("daily_usage_history")
+            or []
+        )
+        hourly_records = (
+            coordinator_data.get("extended_hourly_usage_history")
+            or coordinator_data.get("hourly_usage_history")
+            or []
+        )
+        if not daily_records and not hourly_records:
+            _LOGGER.debug("Mercury statistics: no usage records available; skipping")
             return
 
         # 4. Recorder readiness gate (only failure type swallowed locally).
@@ -329,7 +400,8 @@ class MercuryStatisticsImporter:
             ) - STATISTICS_REIMPORT_DAYS * 86400
 
             energy_stats, cost_stats, null_skip_count = self._build_hourly_entries(
-                records,
+                daily_records,
+                hourly_records,
                 last_sum_energy or 0.0,
                 last_sum_cost or 0.0,
                 cutoff_ts,

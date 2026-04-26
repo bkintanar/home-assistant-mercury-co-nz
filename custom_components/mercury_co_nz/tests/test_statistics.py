@@ -106,7 +106,7 @@ def test_hourly_split_normal_day_24_entries() -> None:
     """A normal NZST day (no DST transition) produces 24 hourly entries."""
     records = [{"date": "2026-05-15T00:00:00", "consumption": 24.0, "cost": 12.0}]
     energy, cost, null = MercuryStatisticsImporter._build_hourly_entries(
-        records, 0.0, 0.0, -1.0
+        records, [], 0.0, 0.0, -1.0
     )
     assert len(energy) == 24
     assert len(cost) == 24
@@ -126,7 +126,7 @@ def test_hourly_split_dst_end_25_hour_day() -> None:
     """First Sunday of April 2026 — NZDT ends, clocks go back, 25-hour day."""
     records = [{"date": "2026-04-05T00:00:00", "consumption": 25.0, "cost": 12.5}]
     energy, _cost, _ = MercuryStatisticsImporter._build_hourly_entries(
-        records, 0.0, 0.0, -1.0
+        records, [], 0.0, 0.0, -1.0
     )
     assert len(energy) == 25, f"expected 25 entries on DST-end day, got {len(energy)}"
     assert energy[0]["state"] == pytest.approx(1.0)
@@ -139,7 +139,7 @@ def test_hourly_split_dst_start_23_hour_day() -> None:
     """Last Sunday of September 2026 — NZDT begins, clocks spring forward, 23-hour day."""
     records = [{"date": "2026-09-27T00:00:00", "consumption": 23.0, "cost": 11.5}]
     energy, _cost, _ = MercuryStatisticsImporter._build_hourly_entries(
-        records, 0.0, 0.0, -1.0
+        records, [], 0.0, 0.0, -1.0
     )
     assert len(energy) == 23, f"expected 23 entries on DST-start day, got {len(energy)}"
     assert energy[0]["state"] == pytest.approx(1.0)
@@ -154,7 +154,7 @@ def test_hourly_split_skips_already_imported() -> None:
     # Cutoff = start of 2026-05-15 (NZ midnight = 2026-05-14 12:00 UTC).
     cutoff = datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc).timestamp()
     energy, _cost, _ = MercuryStatisticsImporter._build_hourly_entries(
-        records, 0.0, 0.0, cutoff
+        records, [], 0.0, 0.0, cutoff
     )
     # The 24 entries from 2026-05-14 are all strictly before cutoff -> skipped.
     # The 24 entries from 2026-05-15 start at exactly cutoff -> included (not strictly <).
@@ -170,7 +170,7 @@ def test_hourly_split_counts_null_records() -> None:
         {"date": "2026-05-17T00:00:00", "consumption": 24.0, "cost": 12.0},
     ]
     energy, cost, null_count = MercuryStatisticsImporter._build_hourly_entries(
-        records, 0.0, 0.0, -1.0
+        records, [], 0.0, 0.0, -1.0
     )
     assert null_count == 2
     assert len(energy) == 24
@@ -184,10 +184,80 @@ def test_hourly_split_counts_unparseable_date() -> None:
         {"date": None, "consumption": 24.0, "cost": 12.0},
     ]
     energy, _cost, null_count = MercuryStatisticsImporter._build_hourly_entries(
-        records, 0.0, 0.0, -1.0
+        records, [], 0.0, 0.0, -1.0
     )
     assert null_count == 2
     assert len(energy) == 0
+
+
+def test_hourly_records_emit_one_entry_each() -> None:
+    """One hourly record produces exactly one StatisticData entry (no /24 division)."""
+    hourly = [
+        {"datetime": "2026-04-25T00:00:00+12:00", "consumption": 0.5, "cost": 0.10},
+        {"datetime": "2026-04-25T01:00:00+12:00", "consumption": 0.7, "cost": 0.14},
+        {"datetime": "2026-04-25T02:00:00+12:00", "consumption": 0.3, "cost": 0.06},
+    ]
+    energy, cost, null = MercuryStatisticsImporter._build_hourly_entries(
+        [], hourly, 0.0, 0.0, -1.0,
+    )
+    assert len(energy) == 3
+    assert len(cost) == 3
+    assert null == 0
+    # 2026-04-25 00:00 NZ (NZST = UTC+12) -> 2026-04-24 12:00 UTC.
+    assert energy[0]["start"] == datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
+    assert energy[0]["state"] == pytest.approx(0.5)
+    assert cost[0]["state"] == pytest.approx(0.10)
+    # Cumulative sums follow raw values — no division applied.
+    assert energy[2]["sum"] == pytest.approx(1.5)
+    assert cost[2]["sum"] == pytest.approx(0.30)
+
+
+def test_hourly_overrides_daily_for_same_nz_day() -> None:
+    """When hourly covers an NZ day, the daily record for that day is suppressed."""
+    daily = [
+        {"date": "2026-04-25T00:00:00", "consumption": 24.0, "cost": 12.0},
+        {"date": "2026-04-26T00:00:00", "consumption": 12.0, "cost": 6.0},
+    ]
+    # One hourly point inside 2026-04-25 NZ-local day suppresses the whole daily
+    # record for that day; 2026-04-26 still gets the 24-entry split.
+    hourly = [
+        {"datetime": "2026-04-25T10:00:00+12:00", "consumption": 5.0, "cost": 2.5},
+    ]
+    energy, _cost, null = MercuryStatisticsImporter._build_hourly_entries(
+        daily, hourly, 0.0, 0.0, -1.0,
+    )
+    assert null == 0
+    # 1 hourly entry for 2026-04-25 + 24 daily-split entries for 2026-04-26 = 25.
+    assert len(energy) == 25
+
+
+def test_daily_only_path_unchanged_when_no_hourly() -> None:
+    """Empty hourly_records preserves the original daily-split behaviour exactly."""
+    daily = [{"date": "2026-05-15T00:00:00", "consumption": 24.0, "cost": 12.0}]
+    energy, cost, null = MercuryStatisticsImporter._build_hourly_entries(
+        daily, [], 0.0, 0.0, -1.0,
+    )
+    assert len(energy) == 24
+    assert energy[0]["state"] == pytest.approx(1.0)
+    assert cost[0]["state"] == pytest.approx(0.5)
+    assert null == 0
+
+
+def test_merged_sums_strictly_monotonic() -> None:
+    """Cumulative sum is monotonic across mixed daily-split + hourly entries."""
+    daily = [{"date": "2026-04-23T00:00:00", "consumption": 24.0, "cost": 12.0}]
+    hourly = [
+        {"datetime": "2026-04-25T10:00:00+12:00", "consumption": 0.5, "cost": 0.10},
+        {"datetime": "2026-04-25T11:00:00+12:00", "consumption": 0.7, "cost": 0.14},
+    ]
+    energy, _cost, _null = MercuryStatisticsImporter._build_hourly_entries(
+        daily, hourly, 0.0, 0.0, -1.0,
+    )
+    # Entries appear in chronological order; sums increase strictly monotonically.
+    starts = [e["start"] for e in energy]
+    assert starts == sorted(starts)
+    sums = [e["sum"] for e in energy]
+    assert all(b > a for a, b in zip(sums, sums[1:]))
 
 
 # ----------------------------------------------------------------------------

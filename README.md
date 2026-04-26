@@ -90,7 +90,7 @@ Up to **180 days of historical data** are backfilled on first install (from the 
 
 ### Notes
 
-- Mercury provides daily-resolution data only; the integration spreads each daily total across 23/24/25 hourly bins (DST-aware) so the dashboard hourly view shows a smooth profile rather than a single midnight spike.
+- Mercury exposes per-hour usage in addition to daily totals. The integration prefers real per-hour values for the dashboard hourly view; days outside the hourly cache window fall back to a daily-total split evenly across 23/24/25 hours (DST-aware), so the trailing 180-day backfill is still smooth even before the hourly cache has filled.
 - Mercury bill corrections within the trailing 3 days are absorbed automatically (recent days are re-imported on every poll).
 - If you previously set up template-sensor + utility_meter workarounds for the Energy Dashboard, you can remove them after enabling these statistics.
 

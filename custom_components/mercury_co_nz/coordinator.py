@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, CONF_EMAIL
+from .const import DOMAIN, CONF_EMAIL, STATISTICS_HOURLY_RETENTION_DAYS
 from .mercury_api import MercuryAPI
 from .statistics import MercuryStatisticsImporter
 
@@ -192,7 +192,7 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"Error communicating with API: {exception}") from exception
 
     async def _store_hourly_data_json(self, data: dict[str, Any]) -> None:
-        """Store cumulative hourly usage data in JSON file for 7-day history."""
+        """Store cumulative hourly usage data in JSON file (matches daily 180-day retention)."""
         if not data or 'hourly_usage_history' not in data:
             _LOGGER.debug("No hourly usage history to store")
             return
@@ -239,12 +239,12 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                     }
                     hourly_data[datetime_key] = hour_info  # This will overwrite if datetime exists
 
-            # Keep last 7 days (168 hours) to prevent unlimited growth
-            # Use UTC time for consistent timezone handling
+            # Keep last STATISTICS_HOURLY_RETENTION_DAYS (matches daily 180-day cap
+            # so the Energy Dashboard hourly profile spans the same window as the
+            # daily backfill).
             now_utc = datetime.now(timezone.utc)
-            cutoff_time = now_utc - timedelta(days=7)
+            cutoff_time = now_utc - timedelta(days=STATISTICS_HOURLY_RETENTION_DAYS)
 
-                        # Filter to keep only last 7 days
             filtered_hourly_data = {}
             for datetime_key, hour_info in hourly_data.items():
                 try:
@@ -263,8 +263,12 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             hourly_data = filtered_hourly_data
 
             if len(existing_hourly_data) != len(hourly_data):
-                _LOGGER.info("Trimmed hourly data to last 7 days (was %d hours, now %d hours)",
-                           len(existing_hourly_data), len(hourly_data))
+                _LOGGER.info(
+                    "Trimmed hourly data to last %d days (was %d hours, now %d hours)",
+                    STATISTICS_HOURLY_RETENTION_DAYS,
+                    len(existing_hourly_data),
+                    len(hourly_data),
+                )
 
             # Create sorted hourly_list for graphs
             hourly_list = [hourly_data[datetime_key] for datetime_key in sorted(hourly_data.keys())]
@@ -293,8 +297,8 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                 "meta": {
                     "source": "mercury_energy_api",
                     "integration": "mercury_co_nz",
-                    "retention_days": 7,
-                    "retention_hours": 168,
+                    "retention_days": STATISTICS_HOURLY_RETENTION_DAYS,
+                    "retention_hours": STATISTICS_HOURLY_RETENTION_DAYS * 24,
                     "endpoint": "http://localhost:8123/local/mercury_hourly.json"
                 }
             }
@@ -435,7 +439,7 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.error("❌ Failed to store daily data JSON: %s", e)
 
     async def _load_extended_hourly_data(self) -> dict[str, Any]:
-        """Load extended hourly data from JSON file to expose via sensors (7-day retention)."""
+        """Load extended hourly data from JSON file (matches daily 180-day retention)."""
         try:
             www_dir = os.path.join(self.hass.config.config_dir, "www")
             json_file = os.path.join(www_dir, "mercury_hourly.json")
