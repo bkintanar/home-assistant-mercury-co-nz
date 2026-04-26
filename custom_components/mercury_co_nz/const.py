@@ -328,3 +328,16 @@ STATISTICS_BACKFILL_DAYS: Final[int] = 180  # matches the daily JSON retention c
 STATISTICS_REIMPORT_DAYS: Final[int] = 3  # always re-import last N days to absorb Mercury bill corrections
 STATISTICS_FAILURE_NOTIFICATION_THRESHOLD: Final[int] = 3  # consecutive failures before user-visible notification
 STATISTICS_FAILURE_BACKOFF_THRESHOLD: Final[int] = 12  # consecutive failures (≈1 hour) before stopping retries
+
+# Chart attribute size limits (issue #4)
+# HA recorder caps state_attributes at 16384 bytes; oversize attrs are DROPPED
+# (not truncated), causing unit_of_measurement to be lost and downstream
+# statistics-compile to fail unit-mismatch checks. We truncate the chart-history
+# attributes in extra_state_attributes to stay comfortably under 14KB total.
+#
+# Full 180-day history is still retained in coordinator.data + the JSON files
+# at www/mercury_daily.json — used by the statistics importer (Energy Dashboard
+# gets 180-day backfill) and accessible via /local/ if a future card refactor
+# wants to restore the full chart range without growing entity attributes.
+CHART_ATTRIBUTE_DAILY_DAYS: Final[int] = 45
+CHART_ATTRIBUTE_HOURLY_HOURS: Final[int] = 48

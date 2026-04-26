@@ -10,7 +10,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, SENSOR_TYPES, DEFAULT_NAME, CONF_EMAIL
+from .const import (
+    DOMAIN,
+    SENSOR_TYPES,
+    DEFAULT_NAME,
+    CONF_EMAIL,
+    CHART_ATTRIBUTE_DAILY_DAYS,
+    CHART_ATTRIBUTE_HOURLY_HOURS,
+)
 from .coordinator import MercuryDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -245,87 +252,63 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             "current_bill"       # Current bill sensor
         ]
 
-        # Only add large historical datasets to chart-capable sensors
+        # Only add large historical datasets to chart-capable sensors.
+        # Issue #4: HA recorder caps state_attributes at 16384 bytes; oversize
+        # attrs are DROPPED (not truncated), causing unit_of_measurement to be
+        # lost downstream. Truncate the chart history lists to fit ~14KB.
+        # Full 180-day history is preserved in coordinator.data + the JSON
+        # files for the statistics importer (Energy Dashboard).
         if self._sensor_type in CHART_DATA_SENSORS:
-            # Add detailed time-series data for graphing
-            # Use extended historical data if available (cumulative), fallback to current data
-            if "extended_daily_usage_history" in self.coordinator.data:
-                daily_history = self.coordinator.data["extended_daily_usage_history"]
-                attributes["data_source"] = "mercury_energy_api_extended"
-                _LOGGER.debug("Using extended daily usage history: %d days", len(daily_history))
-            elif "daily_usage_history" in self.coordinator.data:
-                daily_history = self.coordinator.data["daily_usage_history"]
-                attributes["data_source"] = "mercury_energy_api"
+            # Daily usage history — truncate to last CHART_ATTRIBUTE_DAILY_DAYS.
+            daily_source = self.coordinator.data.get(
+                "extended_daily_usage_history"
+            ) or self.coordinator.data.get("daily_usage_history")
+            if daily_source:
+                if "extended_daily_usage_history" in self.coordinator.data:
+                    attributes["data_source"] = "mercury_energy_api_extended"
+                    _LOGGER.debug(
+                        "Using extended daily usage history: %d days (truncating to last %d for attributes)",
+                        len(daily_source), CHART_ATTRIBUTE_DAILY_DAYS,
+                    )
+                else:
+                    attributes["data_source"] = "mercury_energy_api"
+                attributes["daily_usage_history"] = daily_source[-CHART_ATTRIBUTE_DAILY_DAYS:]
 
-            if "daily_usage_history" in self.coordinator.data or "extended_daily_usage_history" in self.coordinator.data:
-                # Store the full daily usage history for graphing
-                attributes["daily_usage_history"] = daily_history
-            else:
-                # Also add a simplified version for easier access
-                attributes["recent_usage"] = [
-                    {
-                        "date": day.get("date", "").split("T")[0],  # Just the date part
-                        "consumption": day.get("consumption", 0),
-                        "cost": day.get("cost", 0)
-                    }
-                    for day in daily_history
-                ]
-                attributes["period_days"] = len(daily_history)
-
-                # Add metadata about historical data
-                if "total_historical_days" in self.coordinator.data:
-                    attributes["total_historical_days"] = self.coordinator.data["total_historical_days"]
-
-            # Add temperature history for chart sensors (if available)
-            # Use extended temperature data if available (cumulative), fallback to current data
-            if "extended_temperature_history" in self.coordinator.data:
-                temp_history = self.coordinator.data["extended_temperature_history"]
-                _LOGGER.debug("Using extended temperature history: %d days", len(temp_history))
-            elif "temperature_history" in self.coordinator.data:
-                temp_history = self.coordinator.data["temperature_history"]
-
-            if "temperature_history" in self.coordinator.data or "extended_temperature_history" in self.coordinator.data:
-                # Store the full temperature history for graphing
-                attributes["temperature_history"] = temp_history
-
-                # Also add a simplified version for easier access
+            # Temperature — drop `temperature_history` (unused by the card; verified
+            # by grep — only `recent_temperatures` is consumed). Truncate the
+            # simplified `recent_temperatures` to match daily window.
+            temp_source = self.coordinator.data.get(
+                "extended_temperature_history"
+            ) or self.coordinator.data.get("temperature_history")
+            if temp_source:
+                truncated_temps = temp_source[-CHART_ATTRIBUTE_DAILY_DAYS:]
                 attributes["recent_temperatures"] = [
                     {
                         "date": day.get("date", "").split("T")[0],
-                        "temperature": day.get("temp", 0)
+                        "temperature": day.get("temp", 0),
                     }
-                    for day in temp_history
+                    for day in truncated_temps
                 ]
 
-            # Add hourly usage history for chart sensors (if available)
-            # Use extended hourly data if available (cumulative), fallback to current data
-            if "extended_hourly_usage_history" in self.coordinator.data:
-                hourly_history = self.coordinator.data["extended_hourly_usage_history"]
-                attributes["data_source_hourly"] = "mercury_energy_api_extended"
-                _LOGGER.debug("Using extended hourly usage history: %d hours", len(hourly_history))
-            elif "hourly_usage_history" in self.coordinator.data:
-                hourly_history = self.coordinator.data["hourly_usage_history"]
-                attributes["data_source_hourly"] = "mercury_energy_api"
+            # Hourly usage history — truncate to last CHART_ATTRIBUTE_HOURLY_HOURS (~2 days).
+            hourly_source = self.coordinator.data.get(
+                "extended_hourly_usage_history"
+            ) or self.coordinator.data.get("hourly_usage_history")
+            if hourly_source:
+                if "extended_hourly_usage_history" in self.coordinator.data:
+                    attributes["data_source_hourly"] = "mercury_energy_api_extended"
+                    _LOGGER.debug(
+                        "Using extended hourly usage history: %d hours (truncating to last %d for attributes)",
+                        len(hourly_source), CHART_ATTRIBUTE_HOURLY_HOURS,
+                    )
+                else:
+                    attributes["data_source_hourly"] = "mercury_energy_api"
+                attributes["hourly_usage_history"] = hourly_source[-CHART_ATTRIBUTE_HOURLY_HOURS:]
 
-            if "hourly_usage_history" in self.coordinator.data or "extended_hourly_usage_history" in self.coordinator.data:
-                # Store the full hourly usage history for graphing
-                attributes["hourly_usage_history"] = hourly_history
-            else:
-                # Also add metadata
-                attributes["hourly_data_points"] = len(hourly_history)
-
-                # Add metadata about historical hourly data
-                if "total_historical_hours" in self.coordinator.data:
-                    attributes["total_historical_hours"] = self.coordinator.data["total_historical_hours"]
-
-            # Add monthly usage history for chart sensors (if available)
+            # Monthly usage history — small (~1KB), unchanged.
             if "monthly_usage_history" in self.coordinator.data:
                 monthly_history = self.coordinator.data["monthly_usage_history"]
-
-                # Store the full monthly usage history for graphing
                 attributes["monthly_usage_history"] = monthly_history
-
-                # Also add metadata
                 attributes["monthly_data_points"] = len(monthly_history)
 
 
