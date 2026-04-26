@@ -308,6 +308,13 @@ def test_parse_rate_amount_zero_is_preserved() -> None:
     assert MercuryAPI._parse_rate_amount(0, "$/kWh") == 0.0
 
 
+def test_parse_rate_amount_dollar_prefix_overrides_cents_measure() -> None:
+    """If value has $ prefix but measure says 'c/kWh' (inconsistent API),
+    trust the value's currency symbol — don't divide by 100."""
+    # $0.2737 with cents measure must STILL yield 0.2737, not 0.002737.
+    assert MercuryAPI._parse_rate_amount("$0.2737", "c/kWh") == 0.2737
+
+
 def test_normalize_handles_dollar_string_anytime_rate() -> None:
     """Regression test for the bug from issue #6 logs.
 

@@ -588,13 +588,17 @@ class MercuryAPI:
         # If pymercury ever returns a numeric type, treat it as already
         # canonical dollars. The current Mercury API delivers strings; this
         # branch is defensive for future format changes.
+        has_dollar_prefix = False
         if isinstance(value, (int, float)):
             numeric = float(value)
         else:
-            # Strip currency prefix/suffix and thousands separator.
+            raw_str = str(value).strip()
+            # Track the $ prefix BEFORE stripping it — the value's own currency
+            # symbol is a stronger signal than the `measure` field. If the
+            # value says dollars and the measure says cents, the value wins.
+            has_dollar_prefix = raw_str.startswith("$")
             cleaned = (
-                str(value)
-                .strip()
+                raw_str
                 .replace("$", "")
                 .replace(",", "")
                 .rstrip("c")
@@ -608,10 +612,15 @@ class MercuryAPI:
                 )
                 return None
 
-        # Cents -> dollars only if the measure explicitly says cents. Mercury
-        # actually returns dollars (verified by user runtime data); the cents
-        # branch is defensive for future format variation.
-        if measure and "c" in measure.lower() and "$" not in measure:
+        # Cents -> dollars only if the measure explicitly says cents AND the
+        # value itself wasn't dollar-prefixed. Mercury actually returns dollars
+        # today; the cents branch is defensive for future format variation.
+        if (
+            not has_dollar_prefix
+            and measure
+            and "c" in measure.lower()
+            and "$" not in measure
+        ):
             numeric = numeric / 100.0
 
         return round(numeric, 6)
