@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from homeassistant.components import persistent_notification
@@ -33,6 +33,8 @@ from .const import (
     STATISTICS_ENERGY_SUFFIX,
     STATISTICS_FAILURE_BACKOFF_THRESHOLD,
     STATISTICS_FAILURE_NOTIFICATION_THRESHOLD,
+    STATISTICS_GAS_CONSUMPTION_SUFFIX,
+    STATISTICS_GAS_COST_SUFFIX,
     STATISTICS_REIMPORT_DAYS,
 )
 
@@ -57,15 +59,29 @@ class MercuryStatisticsImporter:
     the daily total split evenly across 23/24/25 hours (DST-aware).
     """
 
-    def __init__(self, hass: HomeAssistant, email: str) -> None:
-        """Initialise; schedule async load of any persisted id_prefix."""
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        email: str,
+        fuel_type: Literal["electricity", "gas"] = "electricity",
+    ) -> None:
+        """Initialise; schedule async load of any persisted id_prefix.
+
+        fuel_type defaults to "electricity" so the existing single-arg
+        construction in coordinator.py keeps working byte-identically.
+        Electricity Store key MUST stay as f"{DOMAIN}_statistics_{email_hash}"
+        — existing users have their id_prefix locked under that key; renaming
+        would orphan every existing electricity series.
+        """
         self._hass = hass
         self._email = email
+        self._fuel_type = fuel_type
         self._email_hash = hashlib.md5(email.encode()).hexdigest()[:8]
+        store_key_suffix = "" if fuel_type == "electricity" else f"_{fuel_type}"
         self._store: Store = Store(
             hass,
             version=_STORE_VERSION,
-            key=f"{DOMAIN}_statistics_{self._email_hash}",
+            key=f"{DOMAIN}_statistics{store_key_suffix}_{self._email_hash}",
         )
         self._id_prefix: str | None = None
         self._consecutive_failures: int = 0
@@ -109,13 +125,24 @@ class MercuryStatisticsImporter:
         (verified against HA 2025.11+ recorder/models/statistics.py). `unit_class=None`
         for cost skips unit conversion so any string (including "NZD") is accepted.
         """
-        energy_statistic_id = f"{DOMAIN}:{id_prefix}_{STATISTICS_ENERGY_SUFFIX}"
-        cost_statistic_id = f"{DOMAIN}:{id_prefix}_{STATISTICS_COST_SUFFIX}"
+        if self._fuel_type == "gas":
+            consumption_suffix = STATISTICS_GAS_CONSUMPTION_SUFFIX
+            cost_suffix = STATISTICS_GAS_COST_SUFFIX
+            consumption_name = f"Mercury {id_prefix} gas consumption"
+            cost_name = f"Mercury {id_prefix} gas cost"
+        else:
+            consumption_suffix = STATISTICS_ENERGY_SUFFIX
+            cost_suffix = STATISTICS_COST_SUFFIX
+            consumption_name = f"Mercury {id_prefix} consumption"
+            cost_name = f"Mercury {id_prefix} cost"
+
+        energy_statistic_id = f"{DOMAIN}:{id_prefix}_{consumption_suffix}"
+        cost_statistic_id = f"{DOMAIN}:{id_prefix}_{cost_suffix}"
 
         energy_meta = StatisticMetaData(
             mean_type=StatisticMeanType.NONE,
             has_sum=True,
-            name=f"Mercury {id_prefix} consumption",
+            name=consumption_name,
             source=DOMAIN,
             statistic_id=energy_statistic_id,
             unit_class=EnergyConverter.UNIT_CLASS,
@@ -124,7 +151,7 @@ class MercuryStatisticsImporter:
         cost_meta = StatisticMetaData(
             mean_type=StatisticMeanType.NONE,
             has_sum=True,
-            name=f"Mercury {id_prefix} cost",
+            name=cost_name,
             source=DOMAIN,
             statistic_id=cost_statistic_id,
             unit_class=None,
@@ -151,6 +178,99 @@ class MercuryStatisticsImporter:
         last_sum = entry.get("sum")
         last_start = entry.get("start")
         return float(last_sum if last_sum is not None else 0.0), last_start
+
+    @staticmethod
+    def _parse_invoice_end_utc(raw: str) -> datetime | None:
+        """Parse Mercury's invoice_to / month-start string into hour-aligned UTC.
+
+        Accepts:
+        - Full ISO with offset: '2026-04-30T10:00:00+13:00'
+        - Naive datetime: '2026-04-30T00:00:00' (assumed NZ-local)
+        - Date-only: '2026-04-30' (assumed NZ-local midnight)
+
+        Returns None on parse failure so the caller can increment its skip counter.
+        """
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        s = raw.strip()
+        nz = ZoneInfo(NZ_TIMEZONE)
+        try:
+            if "T" not in s:
+                # Date-only — treat as NZ-local midnight at the start of that day.
+                parsed = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=nz)
+            else:
+                parsed = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=nz)
+        except ValueError:
+            return None
+        utc = parsed.astimezone(timezone.utc)
+        return utc.replace(minute=0, second=0, microsecond=0)
+
+    @staticmethod
+    def _build_monthly_entries(
+        monthly_records: list[dict[str, Any]],
+        energy_sum_start: float,
+        cost_sum_start: float,
+        cutoff_ts: float,
+    ) -> tuple[list[StatisticData], list[StatisticData], int]:
+        """Build one StatisticData per Mercury invoice period (gas only).
+
+        Mercury's gas API only returns monthly aggregates. Each input record
+        represents an invoice period with `consumption` (kWh), `cost` (NZD),
+        `invoice_from`, `invoice_to`, and `date`. We anchor the entry at
+        invoice_to (end of period) — consumption "completed" by then —
+        hour-aligned to UTC. Sums accumulate chronologically so the series
+        is strictly monotonic.
+
+        Mirrors the (signature, return-tuple, skip-counter) contract of
+        `_build_hourly_entries` so async_update can branch on fuel_type
+        without changing the surrounding flow.
+        """
+        skipped = 0
+        # invoice_to_utc -> (kwh, cost)
+        buckets: dict[datetime, tuple[float, float]] = {}
+
+        for record in monthly_records or []:
+            invoice_to_raw = record.get("invoice_to") or record.get("date")
+            if not isinstance(invoice_to_raw, str):
+                skipped += 1
+                continue
+            anchor = MercuryStatisticsImporter._parse_invoice_end_utc(invoice_to_raw)
+            if anchor is None:
+                skipped += 1
+                continue
+            consumption = record.get("consumption")
+            cost = record.get("cost")
+            if consumption is None or cost is None:
+                skipped += 1
+                continue
+            buckets[anchor] = (float(consumption), float(cost))
+
+        # Filter out records already imported (anchor at or before cutoff).
+        # `energy_sum_start` represents the recorder's cumulative sum at the
+        # last imported entry, so new emissions accumulate from there — pre-cutoff
+        # buckets must NOT contribute or we double-count.
+        sorted_anchors = [
+            a for a in sorted(buckets.keys()) if a.timestamp() > cutoff_ts
+        ]
+        energy_running = float(energy_sum_start or 0.0)
+        cost_running = float(cost_sum_start or 0.0)
+        energy_stats: list[StatisticData] = []
+        cost_stats: list[StatisticData] = []
+
+        for anchor in sorted_anchors:
+            kwh, cost = buckets[anchor]
+            energy_running += kwh
+            cost_running += cost
+            energy_stats.append(
+                StatisticData(start=anchor, state=kwh, sum=energy_running)
+            )
+            cost_stats.append(
+                StatisticData(start=anchor, state=cost, sum=cost_running)
+            )
+
+        return energy_stats, cost_stats, skipped
 
     @staticmethod
     def _parse_hour_start_utc(record: dict[str, Any]) -> datetime | None:
@@ -342,22 +462,31 @@ class MercuryStatisticsImporter:
             )
             self._currency_warning_emitted = True
 
-        # 3. Pull daily records (extended history preferred for backfill) and
-        #    hourly records (real per-hour data, preferred over the daily split
-        #    for any NZ-local day they cover).
-        daily_records = (
-            coordinator_data.get("extended_daily_usage_history")
-            or coordinator_data.get("daily_usage_history")
-            or []
-        )
-        hourly_records = (
-            coordinator_data.get("extended_hourly_usage_history")
-            or coordinator_data.get("hourly_usage_history")
-            or []
-        )
-        if not daily_records and not hourly_records:
-            _LOGGER.debug("Mercury statistics: no usage records available; skipping")
-            return
+        # 3. Pull records based on fuel_type. Electricity uses daily+hourly
+        #    (with daily-split fallback); gas uses monthly only (Mercury's API
+        #    doesn't expose sub-monthly gas data — confirmed via maintainer testing).
+        if self._fuel_type == "gas":
+            monthly_records = coordinator_data.get("gas_monthly_usage_history") or []
+            daily_records: list[dict[str, Any]] = []
+            hourly_records: list[dict[str, Any]] = []
+            if not monthly_records:
+                _LOGGER.debug("Mercury statistics (gas): no monthly records available; skipping")
+                return
+        else:
+            monthly_records = []
+            daily_records = (
+                coordinator_data.get("extended_daily_usage_history")
+                or coordinator_data.get("daily_usage_history")
+                or []
+            )
+            hourly_records = (
+                coordinator_data.get("extended_hourly_usage_history")
+                or coordinator_data.get("hourly_usage_history")
+                or []
+            )
+            if not daily_records and not hourly_records:
+                _LOGGER.debug("Mercury statistics: no usage records available; skipping")
+                return
 
         # 4. Recorder readiness gate (only failure type swallowed locally).
         try:
@@ -399,13 +528,21 @@ class MercuryStatisticsImporter:
                 last_ts_energy or 0.0
             ) - STATISTICS_REIMPORT_DAYS * 86400
 
-            energy_stats, cost_stats, null_skip_count = self._build_hourly_entries(
-                daily_records,
-                hourly_records,
-                last_sum_energy or 0.0,
-                last_sum_cost or 0.0,
-                cutoff_ts,
-            )
+            if self._fuel_type == "gas":
+                energy_stats, cost_stats, null_skip_count = self._build_monthly_entries(
+                    monthly_records,
+                    last_sum_energy or 0.0,
+                    last_sum_cost or 0.0,
+                    cutoff_ts,
+                )
+            else:
+                energy_stats, cost_stats, null_skip_count = self._build_hourly_entries(
+                    daily_records,
+                    hourly_records,
+                    last_sum_energy or 0.0,
+                    last_sum_cost or 0.0,
+                    cutoff_ts,
+                )
 
             if not energy_stats and not cost_stats:
                 _LOGGER.debug(

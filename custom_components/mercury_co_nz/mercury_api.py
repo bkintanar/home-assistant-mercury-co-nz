@@ -927,6 +927,78 @@ class MercuryAPI:
                 _LOGGER.error("❌ Error fetching electricity usage data: %s", exc, exc_info=True)
                 return {}
 
+    async def get_gas_usage_data(self) -> dict[str, Any]:
+        """Fetch monthly gas usage from Mercury (v1.4.0).
+
+        Mercury's gas API only returns useful data at interval='monthly'.
+        pymercury exposes get_gas_usage(interval='daily') and
+        get_gas_usage_hourly but Mercury responds with empty `usage` arrays
+        for both — confirmed via maintainer testing — so we only call
+        get_gas_usage_monthly.
+
+        Returns a dict whose keys the coordinator will prefix with `gas_`
+        before merging into `combined_data`. The statistics importer reads
+        `gas_monthly_usage_history` and emits one StatisticData entry per
+        Mercury invoice period.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            complete_data = await loop.run_in_executor(
+                None, self._client.get_complete_account_data
+            )
+            if not complete_data:
+                return {}
+
+            account_id = (
+                complete_data.account_ids[0] if complete_data.account_ids else None
+            )
+
+            gas_service = None
+            for service in complete_data.services:
+                if service.is_gas:
+                    gas_service = service
+                    break
+
+            if not gas_service:
+                _LOGGER.debug("No gas service found; skipping gas usage fetch")
+                return {}
+
+            customer_id = complete_data.customer_id
+            service_id = gas_service.service_id
+
+            gas_monthly = await loop.run_in_executor(
+                None,
+                self._client._api_client.get_gas_usage_monthly,
+                customer_id, account_id, service_id,
+            )
+
+            if not gas_monthly:
+                _LOGGER.warning("Mercury get_gas_usage_monthly returned None")
+                return {}
+
+            # Each entry in gas_monthly.daily_usage represents an INVOICE PERIOD
+            # (typically one month) — name is misleading because pymercury reuses
+            # ServiceUsage's daily_usage list regardless of the request interval.
+            monthly_history = list(getattr(gas_monthly, "daily_usage", []) or [])
+
+            _LOGGER.info(
+                "Mercury gas: %d monthly entries, %.2f kWh total, $%.2f total",
+                len(monthly_history),
+                getattr(gas_monthly, "total_usage", 0) or 0,
+                getattr(gas_monthly, "total_cost", 0) or 0,
+            )
+
+            return {
+                "monthly_usage": round(float(getattr(gas_monthly, "total_usage", 0) or 0), DECIMAL_PLACES),
+                "monthly_cost": round(float(getattr(gas_monthly, "total_cost", 0) or 0), DECIMAL_PLACES),
+                "monthly_data_points": getattr(gas_monthly, "data_points", 0),
+                "monthly_usage_history": monthly_history,
+                "service_id": service_id,
+            }
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.error("Mercury gas usage fetch failed: %s", exc, exc_info=True)
+            return {}
+
     def _process_electricity_usage(self, usage: Any) -> dict[str, Any]:
         """Process ElectricityUsage object into normalized sensor data."""
         normalized_data = {}

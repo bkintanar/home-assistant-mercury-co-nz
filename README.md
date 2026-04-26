@@ -88,11 +88,40 @@ Up to **180 days of historical data** are backfilled on first install (from the 
 3. Tick **Use an entity tracking the total costs**. Pick the `mercury_co_nz:...` cost statistic.
 4. (Optional but recommended) Set `homeassistant.currency: NZD` in `configuration.yaml` and restart, otherwise the dashboard cost labels may show `$` instead of `NZ$`.
 
+### Gas (auto-detected, monthly granularity) — v1.4.0+
+
+If your Mercury account includes gas service (alongside electricity, or gas-only), v1.4.0+ automatically imports gas consumption + cost into Home Assistant's Energy Dashboard at **monthly granularity**.
+
+**Why monthly only?** Mercury's gas API does not expose daily or hourly data — only monthly invoice-period aggregates. The integration emits one statistics entry per Mercury invoice period (typically one month), anchored at the end of the period.
+
+**What this looks like in HA:**
+
+- **Energy Dashboard → Monthly tab**: gas bars at correct totals per month — matches your Mercury bill. ✅
+- **Energy Dashboard → Daily / Hourly tabs**: a single bar per Mercury invoice period at `invoice_to`. The daily/hourly views still work but show monthly granularity — this is an honest representation of what Mercury actually provides (no synthetic sub-monthly distribution).
+- **Live `sensor.mercury_nz_gas_*` entities**: not provided in v1.4.0 (would require sub-monthly data Mercury doesn't expose).
+
+**Setup:**
+
+1. Restart Home Assistant after upgrading.
+2. Open **Settings → Energy → Add gas source**.
+3. Select **`Mercury <account-id> gas consumption`** as your gas usage source.
+4. (Optional) Select **`Mercury <account-id> gas cost`** as the gas cost stat.
+
+Mercury reports gas in kWh natively (NZ gas billing is energy-based); HA accepts kWh-denominated gas statistics directly when paired with `device_class=energy` (the same pattern Octopus Energy uses for UK gas).
+
+**Verify detection** in HA logs after restart:
+
+- `Mercury CO NZ: gas service detected; enabling gas statistics importer`
+- `Mercury CO NZ: gas_* keys merged into coordinator data: [...]`
+
+Gas statistics use the same `mercury_co_nz:<id_prefix>_*` namespace as electricity, just with different suffixes (`_gas_consumption` and `_gas_cost` vs `_energy_consumption` and `_energy_cost`).
+
 ### Notes
 
 - Mercury exposes per-hour usage in addition to daily totals. The integration prefers real per-hour values for the dashboard hourly view; days outside the hourly cache window fall back to a daily-total split evenly across 23/24/25 hours (DST-aware), so the trailing 180-day backfill is still smooth even before the hourly cache has filled.
 - Mercury bill corrections within the trailing 3 days are absorbed automatically (recent days are re-imported on every poll).
 - If you previously set up template-sensor + utility_meter workarounds for the Energy Dashboard, you can remove them after enabling these statistics.
+- Gas statistics (v1.4.0+) are monthly-granularity only — see the "Gas (auto-detected, monthly granularity)" section above.
 
 ## 📊 Using with `dynamic_energy_cost` (per-appliance cost tracking)
 

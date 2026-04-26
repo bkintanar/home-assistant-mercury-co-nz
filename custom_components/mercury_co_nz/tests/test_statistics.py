@@ -327,6 +327,62 @@ async def test_async_update_id_flip_logs_error_and_does_not_write(hass, caplog) 
     assert any("ID changed" in rec.message for rec in caplog.records)
 
 
+async def test_async_update_first_run_for_gas_emits_monthly_entries(hass) -> None:
+    """Gas importer with monthly records emits 2 stats with gas-suffixed IDs."""
+    importer = MercuryStatisticsImporter(hass, "test@example.com", fuel_type="gas")
+    await hass.async_block_till_done()
+
+    mock_recorder = MagicMock()
+
+    async def _exec(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    mock_recorder.async_add_executor_job = _exec
+
+    with patch(
+        "custom_components.mercury_co_nz.statistics.get_instance",
+        return_value=mock_recorder,
+    ), patch(
+        "custom_components.mercury_co_nz.statistics.get_last_statistics",
+        return_value={},
+    ), patch(
+        "custom_components.mercury_co_nz.statistics.async_add_external_statistics"
+    ) as mock_add:
+        coordinator_data = {
+            "bill_account_id": "ACC1",
+            "gas_monthly_usage_history": [
+                {
+                    "date": "2026-02-01",
+                    "consumption": 100.0,
+                    "cost": 25.0,
+                    "invoice_from": "2026-02-01T00:00:00+13:00",
+                    "invoice_to": "2026-03-01T00:00:00+13:00",
+                },
+                {
+                    "date": "2026-03-01",
+                    "consumption": 80.0,
+                    "cost": 20.0,
+                    "invoice_from": "2026-03-01T00:00:00+13:00",
+                    "invoice_to": "2026-04-01T00:00:00+13:00",
+                },
+            ],
+        }
+        await importer.async_update(coordinator_data)
+
+    assert mock_add.call_count == 2
+    metas = [call.args[1] for call in mock_add.call_args_list]
+    stat_ids = sorted(m["statistic_id"] for m in metas)
+    assert stat_ids == [
+        f"{DOMAIN}:acc1_gas_consumption",
+        f"{DOMAIN}:acc1_gas_cost",
+    ]
+    # Verify the entries themselves: 2 invoice periods → 2 entries each, monotonic sums
+    energy_call = next(c for c in mock_add.call_args_list if "consumption" in c.args[1]["statistic_id"])
+    energy_entries = energy_call.args[2]
+    assert len(energy_entries) == 2
+    assert [e["sum"] for e in energy_entries] == [100.0, 180.0]
+
+
 async def test_async_update_recorder_unavailable_increments_failure_count(
     hass,
 ) -> None:
