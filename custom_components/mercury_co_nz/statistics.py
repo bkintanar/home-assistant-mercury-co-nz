@@ -206,6 +206,12 @@ class MercuryStatisticsImporter:
                 continue
             consumption = record.get("consumption")
             cost = record.get("cost")
+            # Note: extended_hourly_usage_history rows arrive with `cost`
+            # already normalised to 0.0 by the coordinator JSON cache when
+            # Mercury omits the field (coordinator.py:237). The None check
+            # here only fires for live `hourly_usage_history` rows passed
+            # directly from the API. Zero-cost hours ARE emitted as a real
+            # zero — verify via mercury_hourly.json after first deploy.
             if consumption is None or cost is None:
                 null_skip_count += 1
                 continue
