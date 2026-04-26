@@ -94,6 +94,28 @@ Up to **180 days of historical data** are backfilled on first install (from the 
 - Mercury bill corrections within the trailing 3 days are absorbed automatically (recent days are re-imported on every poll).
 - If you previously set up template-sensor + utility_meter workarounds for the Energy Dashboard, you can remove them after enabling these statistics.
 
+## 📊 Using with `dynamic_energy_cost` (per-appliance cost tracking)
+
+Five new sensors are exposed for the current electricity plan:
+
+| Entity                                     | Unit       | Notes                                               |
+| ------------------------------------------ | ---------- | --------------------------------------------------- |
+| `sensor.mercury_nz_current_rate`           | `NZD/kWh`  | Current per-kWh price (NZD, not cents)              |
+| `sensor.mercury_nz_daily_fixed_charge`     | `NZD/day`  | Daily fixed charge from the active plan             |
+| `sensor.mercury_nz_current_plan`           | text       | Plan name (e.g. "Anytime", "Low User")              |
+| `sensor.mercury_nz_icp_number`             | text       | ICP / Installation Control Point identifier         |
+| `sensor.mercury_nz_plan_change_pending`    | `yes`/`no` | Surfaces upcoming plan transitions                  |
+
+To wire `sensor.mercury_nz_current_rate` into the [HACS dynamic_energy_cost](https://github.com/martinarva/dynamic_energy_cost) integration:
+
+1. Install `dynamic_energy_cost` from HACS.
+2. Add the integration. For each appliance you want to track:
+   - **Power sensor**: a kWh-emitting entity (e.g. a Tapo P110M smart plug's `..._energy_kwh` entity).
+   - **Price sensor**: `sensor.mercury_nz_current_rate`.
+3. The resulting cost sensor reads `power × current_rate` and labels the output in `hass.config.currency`. Set `currency: NZD` in `configuration.yaml` under `homeassistant:` if you want the labels to read NZD.
+
+**Note**: Mercury's API stores rates in NZ cents; this integration converts to NZD/kWh internally so dynamic_energy_cost computes correct values out of the box. Time-of-use (TOU) plans are not yet supported — only the "Anytime" rate is exposed in this release.
+
 ## 🚀 Installation
 
 ### Option 1: HACS (Recommended)

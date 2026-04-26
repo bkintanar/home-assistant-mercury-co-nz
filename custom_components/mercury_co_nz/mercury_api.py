@@ -433,6 +433,132 @@ class MercuryAPI:
             _LOGGER.error("Error normalizing bill data: %s", exc)
             return {}
 
+    async def get_electricity_plans(self, _retry_count: int = 0) -> dict[str, Any]:
+        """Get electricity plan / current rate data from Mercury Energy.
+
+        Issue #6 — exposes the per-kWh rate so HACS dynamic_energy_cost can compute
+        per-appliance costs in real time. Mirrors the get_bill_summary shape but
+        also extracts service_id (the rates endpoint is per-ICP, not per-account).
+        """
+        _LOGGER.debug("Getting electricity plans data (retry count: %d)", _retry_count)
+
+        if not self._authenticated or not self._client:
+            success = await self.authenticate()
+            if not success:
+                _LOGGER.error("Authentication failed for electricity plans")
+                return {}
+
+        try:
+            loop = asyncio.get_event_loop()
+            _LOGGER.info("Getting electricity plans data...")
+
+            # Get account information
+            complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
+            if not complete_data:
+                _LOGGER.error("No account data available")
+                return {}
+
+            customer_id = complete_data.customer_id
+            account_id = complete_data.account_ids[0] if complete_data.account_ids else None
+
+            if not customer_id or not account_id:
+                _LOGGER.error("Missing customer_id or account_id")
+                return {}
+
+            # Find electricity service (plans need service_id, like usage data)
+            electricity_service = None
+            for service in complete_data.services:
+                if service.is_electricity:
+                    electricity_service = service
+                    break
+
+            if not electricity_service:
+                _LOGGER.error("No electricity service found for plans data")
+                return {}
+
+            service_id = electricity_service.service_id
+
+            # Try to get plans using pymercury
+            try:
+                if hasattr(self._client, '_api_client') and hasattr(self._client._api_client, 'get_electricity_plans'):
+                    plans = await loop.run_in_executor(
+                        None,
+                        lambda: self._client._api_client.get_electricity_plans(customer_id, account_id, service_id)
+                    )
+                else:
+                    _LOGGER.warning("Electricity plans method not available in pymercury")
+                    return {}
+            except Exception as api_err:
+                _LOGGER.error("Error calling electricity plans API: %s", api_err)
+                return {}
+
+            if not plans:
+                _LOGGER.warning("No electricity plans data returned")
+                return {}
+
+            _LOGGER.info("Successfully retrieved electricity plans")
+            return self._normalize_plans_data(plans)
+
+        except Exception as exc:
+            if ("Tokens expired" in str(exc) or "refresh failed" in str(exc)) and _retry_count == 0:
+                _LOGGER.warning("Tokens expired, re-authenticating...")
+                self._authenticated = False
+                if await self.authenticate():
+                    return await self.get_electricity_plans(_retry_count + 1)
+
+            _LOGGER.error("Error fetching electricity plans: %s", exc, exc_info=True)
+            return {}
+
+    def _normalize_plans_data(self, plans_data: Any) -> dict[str, Any]:
+        """Normalize ElectricityPlans data to a flat dict.
+
+        CRITICAL: Mercury's anytime_rate and daily_fixed_charge are in NZ CENTS.
+        We divide by 100 here so the resulting sensor exposes NZD/kWh. HACS
+        dynamic_energy_cost parses only the /kWh denominator and labels output
+        with hass.config.currency — exposing raw cents would silently produce
+        100x wrong cost values.
+        """
+        if not plans_data:
+            return {}
+
+        try:
+            # Convert to dict if needed
+            if hasattr(plans_data, '__dict__'):
+                plans_dict = plans_data.__dict__
+            elif hasattr(plans_data, 'to_dict'):
+                plans_dict = plans_data.to_dict()
+            else:
+                plans_dict = plans_data
+
+            # Cents -> NZD conversion. `is not None` (not truthy) preserves a
+            # legitimate 0.0 rate (free-power period) instead of dropping it.
+            anytime_cents = plans_dict.get("anytime_rate")
+            daily_cents = plans_dict.get("daily_fixed_charge")
+
+            normalized = {
+                # Numeric (NZD)
+                "anytime_rate": round(float(anytime_cents) / 100.0, 6) if anytime_cents is not None else None,
+                "daily_fixed_charge": round(float(daily_cents) / 100.0, 6) if daily_cents is not None else None,
+                # Text
+                "current_plan_id": plans_dict.get("current_plan_id") or "",
+                "current_plan_name": plans_dict.get("current_plan_name") or "",
+                "current_plan_description": plans_dict.get("current_plan_description") or "",
+                "current_plan_usage_type": plans_dict.get("current_plan_usage_type") or "",
+                "icp_number": plans_dict.get("icp_number") or "",
+                "anytime_rate_measure": plans_dict.get("anytime_rate_measure") or "",
+                "plan_change_date": plans_dict.get("plan_change_date") or "",
+                # Booleans serialized as text (sensor-only platform)
+                "can_change_plan": "yes" if plans_dict.get("can_change_plan") else "no",
+                "is_pending_plan_change": "yes" if plans_dict.get("is_pending_plan_change") else "no",
+            }
+
+            _LOGGER.debug("Normalized plans data: %s", normalized)
+            return normalized
+
+        except Exception as exc:
+            _LOGGER.error("Error normalizing electricity plans data: %s", exc)
+            return {}
+
 
     async def _execute_api_call_with_fallback(self, api_method, customer_id, account_id, service_id,
                                             usage_key, history_key, log_message, success_message, error_message):

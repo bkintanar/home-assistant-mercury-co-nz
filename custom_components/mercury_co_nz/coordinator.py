@@ -86,6 +86,14 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             usage_content_data = await self.api.get_usage_content()
             _LOGGER.info("Mercury coordinator: Received usage content data")
 
+            _LOGGER.info("📋 Fetching electricity plans data...")
+            plans_data = await self.api.get_electricity_plans()
+            _LOGGER.info("Mercury coordinator: Received plans data")
+            if plans_data:
+                _LOGGER.info("✅ Plans data contains %d keys: %s", len(plans_data), list(plans_data.keys()))
+            else:
+                _LOGGER.warning("⚠️ No plans data received")
+
             # Combine all datasets
             combined_data = usage_data.copy() if usage_data else {}
             if bill_data:
@@ -107,6 +115,11 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                 # Add usage content data with prefix to avoid naming conflicts
                 for key, value in usage_content_data.items():
                     combined_data[f"content_{key}"] = value
+
+            if plans_data:
+                # Add electricity plan data with prefix (issue #6)
+                for key, value in plans_data.items():
+                    combined_data[f"plan_{key}"] = value
 
             _LOGGER.info("Mercury coordinator: Combined data keys: %s", list(combined_data.keys()))
             _LOGGER.debug("Mercury coordinator: Sample data values: %s", {k: v for k, v in list(combined_data.items())[:5]})

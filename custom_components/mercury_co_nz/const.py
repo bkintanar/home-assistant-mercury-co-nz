@@ -272,6 +272,46 @@ SENSOR_TYPES = {
         "device_class": None,
         "state_class": None,
     },
+    # Electricity plan / current rate (issue #6) — feeds HACS dynamic_energy_cost
+    # device_class deliberately None: HA's monetary class only allows state_class=total,
+    # but a current rate is semantically a measurement. Tibber's price sensor follows
+    # the same pattern. The unit "NZD/kWh" is the form dynamic_energy_cost parses
+    # correctly (it extracts only the /kWh denominator).
+    "plan_anytime_rate": {
+        "name": "Current Rate",
+        "unit": "NZD/kWh",
+        "icon": "mdi:cash-multiple",
+        "device_class": None,
+        "state_class": "measurement",
+    },
+    "plan_daily_fixed_charge": {
+        "name": "Daily Fixed Charge",
+        "unit": "NZD/day",
+        "icon": "mdi:cash-clock",
+        "device_class": None,
+        "state_class": "measurement",
+    },
+    "plan_current_plan_name": {
+        "name": "Current Plan",
+        "unit": None,
+        "icon": "mdi:format-list-bulleted-type",
+        "device_class": None,
+        "state_class": None,
+    },
+    "plan_icp_number": {
+        "name": "ICP Number",
+        "unit": None,
+        "icon": "mdi:identifier",
+        "device_class": None,
+        "state_class": None,
+    },
+    "plan_is_pending_plan_change": {
+        "name": "Plan Change Pending",
+        "unit": None,
+        "icon": "mdi:swap-horizontal",
+        "device_class": None,
+        "state_class": None,
+    },
 }
 
 # API Constants
