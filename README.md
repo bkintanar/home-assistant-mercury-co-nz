@@ -358,6 +358,24 @@ custom_components/mercury_co_nz/
 2. Verify internet connectivity
 3. Restart Home Assistant integration
 
+### Plan Sensors Not Showing in Statistics Tab
+
+Three of the v1.2.0 plan sensors are **text-only** and won't appear in
+**Developer Tools → Statistics** (which only lists numeric long-term-stat
+sensors). They DO exist — look in **Developer Tools → States**:
+
+| Entity ID | Where to find it | Example state |
+|-----------|------------------|---------------|
+| `sensor.mercury_nz_current_plan` | States tab | `"Anytime"` (your plan name) |
+| `sensor.mercury_nz_icp_number` | States tab | `"0001263891UN390"` |
+| `sensor.mercury_nz_plan_change_pending` | States tab | `"yes"` / `"no"` |
+| `sensor.mercury_nz_current_rate` | States **and** Statistics tab | `0.2737` (NZD/kWh) |
+| `sensor.mercury_nz_daily_fixed_charge` | States **and** Statistics tab | `1.49` (NZD/day) |
+
+The first three have `state_class=None` and `unit=None` because their values
+are categorical strings, not measurements. HA's Statistics tab is a
+recorder-side feature for numeric sensors only; this is by design.
+
 ### Unit Warnings After Upgrading to v1.2.3 or Later
 
 If you see warnings like:
