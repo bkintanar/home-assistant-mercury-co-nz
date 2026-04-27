@@ -170,94 +170,11 @@ def _build_get_electricity_plans_fixture(
     return api
 
 
-@pytest.mark.asyncio
-async def test_diagnostic_logs_emit_complete_data_identifier(caplog) -> None:
-    """The first diagnostic INFO line surfaces `identifier` from complete_data.services."""
-    api = _build_get_electricity_plans_fixture(
-        plans_return=None,
-        services_return=[],
-        complete_data_identifier="0000123456ABC78",
-        service_id="SVC123",
-    )
-    with caplog.at_level(logging.INFO):
-        result = await api.get_electricity_plans()
-
-    assert result == {}
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any(
-        "service_id=SVC123" in m
-        and "identifier-from-complete_data='0000123456ABC78'" in m
-        for m in msgs
-    ), f"diagnostic log line not found in: {msgs}"
-
-
-@pytest.mark.asyncio
-async def test_diagnostic_logs_emit_get_services_result(caplog) -> None:
-    """The second diagnostic INFO line surfaces what pymercury's get_services returns."""
-    matching_service = MagicMock()
-    matching_service.service_id = "SVC123"
-    matching_service.service_group = "electricity"
-    matching_service.raw_data = {"identifier": "ICP_FROM_GETSERVICES"}
-
-    api = _build_get_electricity_plans_fixture(
-        plans_return=None,
-        services_return=[matching_service],
-        complete_data_identifier="ICP_FROM_COMPLETEDATA",
-        service_id="SVC123",
-    )
-    with caplog.at_level(logging.INFO):
-        result = await api.get_electricity_plans()
-
-    assert result == {}
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any(
-        "get_services returned 1 service(s)" in m
-        and "matched-for-our-service_id=True" in m
-        and "identifier-from-get_services='ICP_FROM_GETSERVICES'" in m
-        for m in msgs
-    ), f"get_services diagnostic line not found in: {msgs}"
-
-
-@pytest.mark.asyncio
-async def test_diagnostic_logs_distinguish_no_services(caplog) -> None:
-    """If get_services returns empty list, diagnostic shows '0 service(s)' / no match."""
-    api = _build_get_electricity_plans_fixture(
-        plans_return=None,
-        services_return=[],
-        complete_data_identifier="ANY",
-        service_id="SVC123",
-    )
-    with caplog.at_level(logging.INFO):
-        await api.get_electricity_plans()
-
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any(
-        "get_services returned 0 service(s)" in m
-        and "matched-for-our-service_id=False" in m
-        for m in msgs
-    ), f"empty-services diagnostic not found in: {msgs}"
-
-
-@pytest.mark.asyncio
-async def test_get_electricity_plans_returns_empty_when_pymercury_returns_none(
-    caplog,
-) -> None:
-    """When pymercury silently returns None, wrapper returns {} and logs the failure-mode hint."""
-    api = _build_get_electricity_plans_fixture(
-        plans_return=None,
-        services_return=[],
-        complete_data_identifier=None,
-    )
-    with caplog.at_level(logging.WARNING):
-        result = await api.get_electricity_plans()
-
-    assert result == {}
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any(
-        "No electricity plans data returned" in m
-        and "(A) get_services empty / no match" in m
-        for m in msgs
-    ), f"failure-mode hint not found in WARNING logs: {msgs}"
+# Note: the v1.2.1-era diagnostic-logging tests for get_electricity_plans were
+# removed during the v2.0.0 multi-ICP refactor. Their diagnostic-string coverage
+# is superseded by the new per-service INFO log in get_electricity_plans
+# ("Mercury plans: fetching for service_id=..."). The pure plans-parsing tests
+# above remain valid.
 
 
 # ----------------------------------------------------------------------------

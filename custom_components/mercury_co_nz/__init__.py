@@ -79,7 +79,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = MercuryDataUpdateCoordinator(
         hass,
-        entry.data,
+        entry,
         update_interval=timedelta(minutes=DEFAULT_SCAN_INTERVAL),
     )
 
@@ -100,6 +100,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info(
         "Mercury integration setup complete; sensors (e.g. sensor.mercury_nz_energy_usage) should appear in Developer Tools → States.",
     )
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate config entry minor_version 1 → 2 (multi-ICP support, v2.0.0).
+
+    v2.0.0 introduces per-ICP sensor multiplication. The actual primary-ICP
+    designation is deferred to the coordinator's first refresh — this function
+    just bumps the entry's minor_version so HA marks the migration done.
+
+    Minor-version bump (NOT major): the addition of `_primary_service_id` to
+    entry.data is additive and backward-compatible. v1.5.x reading a 2.0.0
+    entry ignores the new field; HA downgrades from 2.0.0 → 1.5.x do NOT
+    fail setup. Major VERSION bump would unnecessarily break downgrades.
+    Reference: https://developers.home-assistant.io/blog/2023/12/18/config-entry-minor-version/
+    """
+    _LOGGER.info(
+        "Migrating Mercury CO NZ config entry: minor_version %s -> 2",
+        config_entry.minor_version,
+    )
+    if config_entry.minor_version < 2:
+        hass.config_entries.async_update_entry(config_entry, minor_version=2)
     return True
 
 
