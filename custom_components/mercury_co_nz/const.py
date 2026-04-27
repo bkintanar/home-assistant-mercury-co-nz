@@ -333,6 +333,29 @@ STATISTICS_COST_SUFFIX: Final[str] = "energy_cost"
 # we emit one StatisticData per invoice period.
 STATISTICS_GAS_CONSUMPTION_SUFFIX: Final[str] = "gas_consumption"
 STATISTICS_GAS_COST_SUFFIX: Final[str] = "gas_cost"
+
+# Multi-ICP scope split (v2.0.0).
+# ICP-scoped: per-meter values from get_usage_data() / get_electricity_plans().
+# Multiplied per ICP in sensor.py — primary ICP keeps legacy entity_id,
+# secondary ICPs get ICP-token-prefixed entity_ids.
+# Account-scoped (everything NOT in this set): bill_*, weekly_*, monthly_*,
+# customer_id — single instance attached to the parent "Mercury Account" device.
+ICP_SCOPED_SENSOR_TYPES: Final[frozenset[str]] = frozenset({
+    "total_usage",
+    "energy_usage",
+    "current_bill",
+    "latest_daily_usage",
+    "latest_daily_cost",
+    "average_temperature",
+    "current_temperature",
+    "hourly_usage",
+    "monthly_usage",
+    "plan_anytime_rate",
+    "plan_daily_fixed_charge",
+    "plan_current_plan_name",
+    "plan_icp_number",
+    "plan_is_pending_plan_change",
+})
 NZ_TIMEZONE: Final[str] = "Pacific/Auckland"
 STATISTICS_BACKFILL_DAYS: Final[int] = 180  # matches the daily JSON retention cap
 STATISTICS_HOURLY_RETENTION_DAYS: Final[int] = 180  # hourly cache retention; matches daily cap so Energy Dashboard hourly profile spans the same window

@@ -44,6 +44,17 @@ _NOTIFICATION_ID = "mercury_co_nz_statistics_failed"
 _STORE_VERSION = 1
 
 
+def _sanitize_for_key(service_id: str | None) -> str:
+    """Sanitize a service_id for use in Store keys, statistic_ids, entity_ids.
+
+    Replaces dashes/dots with underscores and lowercases. Used both here
+    and in coordinator.py for consistent ICP token generation.
+    """
+    if not service_id:
+        return "primary"
+    return str(service_id).replace("-", "_").replace(".", "_").lower()
+
+
 class MercuryStatisticsImporter:
     """Push Mercury kWh + NZD costs into HA's long-term statistics table.
 
@@ -64,24 +75,35 @@ class MercuryStatisticsImporter:
         hass: HomeAssistant,
         email: str,
         fuel_type: Literal["electricity", "gas"] = "electricity",
+        service_id: str | None = None,
+        is_primary: bool = True,
     ) -> None:
         """Initialise; schedule async load of any persisted id_prefix.
 
-        fuel_type defaults to "electricity" so the existing single-arg
-        construction in coordinator.py keeps working byte-identically.
-        Electricity Store key MUST stay as f"{DOMAIN}_statistics_{email_hash}"
-        — existing users have their id_prefix locked under that key; renaming
-        would orphan every existing electricity series.
+        Default args (fuel_type='electricity', service_id=None, is_primary=True)
+        produce byte-identical Store key, statistic_ids, and names to v1.4.1 —
+        single-arg construction continues to work for back-compat.
+
+        For multi-ICP (v2.0.0): non-primary ICPs include an icp_token suffix
+        in the Store key AND in statistic_ids. Primary ICP keeps the legacy
+        formula so existing users' id_prefix lock + Energy Dashboard history
+        survive the upgrade.
         """
         self._hass = hass
         self._email = email
         self._fuel_type = fuel_type
+        self._service_id = service_id
+        self._is_primary = is_primary
         self._email_hash = hashlib.md5(email.encode()).hexdigest()[:8]
-        store_key_suffix = "" if fuel_type == "electricity" else f"_{fuel_type}"
+        fuel_suffix = "" if fuel_type == "electricity" else f"_{fuel_type}"
+        # LOAD-BEARING: only non-primary ICPs add the icp_suffix. Primary's
+        # Store key MUST match v1.4.1 exactly: f"{DOMAIN}_statistics_{email_hash}"
+        # for elec, f"{DOMAIN}_statistics_gas_{email_hash}" for gas.
+        icp_suffix = "" if is_primary else f"_{_sanitize_for_key(service_id)}"
         self._store: Store = Store(
             hass,
             version=_STORE_VERSION,
-            key=f"{DOMAIN}_statistics{store_key_suffix}_{self._email_hash}",
+            key=f"{DOMAIN}_statistics{fuel_suffix}{icp_suffix}_{self._email_hash}",
         )
         self._id_prefix: str | None = None
         self._consecutive_failures: int = 0
@@ -128,16 +150,19 @@ class MercuryStatisticsImporter:
         if self._fuel_type == "gas":
             consumption_suffix = STATISTICS_GAS_CONSUMPTION_SUFFIX
             cost_suffix = STATISTICS_GAS_COST_SUFFIX
-            consumption_name = f"Mercury {id_prefix} gas consumption"
-            cost_name = f"Mercury {id_prefix} gas cost"
+            fuel_word = "gas "
         else:
             consumption_suffix = STATISTICS_ENERGY_SUFFIX
             cost_suffix = STATISTICS_COST_SUFFIX
-            consumption_name = f"Mercury {id_prefix} consumption"
-            cost_name = f"Mercury {id_prefix} cost"
+            fuel_word = ""
 
-        energy_statistic_id = f"{DOMAIN}:{id_prefix}_{consumption_suffix}"
-        cost_statistic_id = f"{DOMAIN}:{id_prefix}_{cost_suffix}"
+        # LOAD-BEARING: only non-primary ICPs add the icp_token. Primary's
+        # statistic_id MUST match v1.4.1 exactly: e.g. f"{DOMAIN}:{id_prefix}_energy_consumption"
+        icp_token = "" if self._is_primary else f"_{_sanitize_for_key(self._service_id)}"
+        consumption_name = f"Mercury {id_prefix}{icp_token} {fuel_word}consumption".replace("  ", " ").strip()
+        cost_name = f"Mercury {id_prefix}{icp_token} {fuel_word}cost".replace("  ", " ").strip()
+        energy_statistic_id = f"{DOMAIN}:{id_prefix}{icp_token}_{consumption_suffix}"
+        cost_statistic_id = f"{DOMAIN}:{id_prefix}{icp_token}_{cost_suffix}"
 
         energy_meta = StatisticMetaData(
             mean_type=StatisticMeanType.NONE,
