@@ -88,6 +88,29 @@ Up to **180 days of historical data** are backfilled on first install (from the 
 3. Tick **Use an entity tracking the total costs**. Pick the `mercury_co_nz:...` cost statistic.
 4. (Optional but recommended) Set `homeassistant.currency: NZD` in `configuration.yaml` and restart, otherwise the dashboard cost labels may show `$` instead of `NZ$`.
 
+### Multi-ICP Support — v2.0.0+
+
+If your Mercury account has multiple ICPs (Installation Control Points — separate electricity meters at different premises, or main + EV supply), v2.0.0+ exposes each ICP as a separate device with its own sensors and Energy Dashboard statistic series.
+
+**For single-ICP users (the majority): zero changes.** Your existing entity_ids and Energy Dashboard data are preserved exactly. The "primary ICP" mechanism keeps `sensor.mercury_nz_*` and `mercury_co_nz:<acct>_energy_consumption` byte-identical to v1.5.x.
+
+**For multi-ICP users:**
+
+- **Devices**: 1 parent "Mercury Account" device + N child devices (one per ICP), linked via `via_device`. Account-scoped sensors (bill, weekly summary, monthly summary) attach to the parent; per-meter sensors (usage, cost, plan rate) attach to each ICP child.
+- **Entity IDs**: primary ICP keeps the legacy unsuffixed form (`sensor.mercury_nz_total_usage`, etc.). Secondary ICPs get an ICP-token prefix (e.g., `sensor.mercury_nz_icp_002_total_usage`).
+- **Energy Dashboard**: each ICP has its own selectable source. Add multiple sources under **Settings → Energy → Add electricity grid**.
+- **Statistics**: primary keeps `mercury_co_nz:<acct>_energy_consumption`; secondary uses `mercury_co_nz:<acct>_<icp_token>_energy_consumption`. Same pattern for `_energy_cost`, `_gas_consumption`, `_gas_cost`.
+
+**How "primary" is chosen**: deterministically — the first electricity service returned by Mercury's API. Persisted to the config entry's `_primary_service_id` so it survives HA restarts. This is the v2.0.0 default; manual override via OptionsFlow is planned for v2.1.0+.
+
+**Gas + multi-ICP**: same model. Gas-primary = first gas service in Mercury's response.
+
+**Verify detection** in HA logs after restart:
+
+- `Mercury CO NZ: discovered N electricity ICP(s) + M gas ICP(s); primary_electricity=...; instantiated K importers`
+
+**Single-ICP regression**: `mercury_co_nz:*_energy_consumption` and Store key (`{DOMAIN}_statistics_<email_hash>`) are byte-identical to v1.5.x. No "ID changed" ERROR; existing Energy Dashboard history continues accruing.
+
 ### Gas (auto-detected, monthly granularity) — v1.4.0+
 
 If your Mercury account includes gas service (alongside electricity, or gas-only), v1.4.0+ automatically imports gas consumption + cost into Home Assistant's Energy Dashboard at **monthly granularity**.

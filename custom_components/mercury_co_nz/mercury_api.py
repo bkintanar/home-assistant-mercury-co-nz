@@ -77,8 +77,11 @@ class MercuryAPI:
             self._authenticated = False
             return False
 
-    async def get_weekly_summary(self, _retry_count: int = 0) -> dict[str, Any]:
-        """Get weekly summary data from Mercury Energy using pymercury."""
+    async def get_weekly_summary(self, _retry_count: int = 0) -> dict[str, dict[str, Any]]:
+        """Get weekly summary data per electricity ICP (v2.0.0 multi-ICP).
+
+        Returns {service_id: per_service_dict}. Empty dict if no electricity services.
+        """
         _LOGGER.debug("Getting weekly summary data... (retry count: %d)", _retry_count)
 
         if not self._authenticated or not self._client:
@@ -90,57 +93,43 @@ class MercuryAPI:
 
         try:
             loop = asyncio.get_event_loop()
-            _LOGGER.info("Getting weekly summary data using pymercury...")
+            _LOGGER.info("Getting weekly summary data (multi-ICP)...")
 
-            # Get account information first
             complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
-
             if not complete_data:
                 _LOGGER.error("No account data available for weekly summary")
                 return {}
 
-            # Extract required IDs
             customer_id = complete_data.customer_id
             account_id = complete_data.account_ids[0] if complete_data.account_ids else None
-
-            # Find electricity service
-            electricity_service = None
-            for service in complete_data.services:
-                if service.is_electricity:
-                    electricity_service = service
-                    break
-
-            if not electricity_service:
-                _LOGGER.error("No electricity service found for weekly summary")
+            if not customer_id or not account_id:
+                _LOGGER.error("Missing customer_id or account_id for weekly summary")
                 return {}
 
-            service_id = electricity_service.service_id
-
-            if not customer_id or not account_id or not service_id:
-                _LOGGER.error("Missing required IDs for weekly summary")
+            electricity_services = [s for s in complete_data.services if s.is_electricity]
+            if not electricity_services:
+                _LOGGER.error("No electricity services found for weekly summary")
                 return {}
 
-            _LOGGER.info("Using pymercury get_electricity_summary for weekly data: customer:%s, account:%s, service:%s",
-                        customer_id, account_id, service_id)
+            per_service: dict[str, dict[str, Any]] = {}
+            for service in electricity_services:
+                service_id = service.service_id
+                _LOGGER.info("Weekly summary for service_id=%s", service_id)
 
-            # Use pymercury's built-in get_electricity_summary method to get both weekly and monthly
-            electricity_summary = await loop.run_in_executor(
-                None,
-                self._client._api_client.get_electricity_summary,
-                customer_id, account_id, service_id
-            )
+                electricity_summary = await loop.run_in_executor(
+                    None,
+                    self._client._api_client.get_electricity_summary,
+                    customer_id, account_id, service_id,
+                )
+                if not electricity_summary:
+                    _LOGGER.warning("No weekly summary returned for service_id=%s", service_id)
+                    continue
 
-            if not electricity_summary:
-                _LOGGER.error("No electricity summary data returned for weekly")
-                return {}
+                normalized = self._normalize_weekly_summary_data(electricity_summary)
+                if normalized:
+                    per_service[service_id] = normalized
 
-            _LOGGER.info("Successfully retrieved electricity summary for weekly data")
-            _LOGGER.debug("Raw summary data for weekly: %s", electricity_summary)
-
-            # Normalize the weekly summary data using pymercury's ElectricitySummary object
-            normalized_weekly = self._normalize_weekly_summary_data(electricity_summary)
-            _LOGGER.debug("Normalized weekly summary data: %s", normalized_weekly)
-            return normalized_weekly
+            return per_service
 
         except Exception as exc:
             if ("Tokens expired" in str(exc) or "refresh failed" in str(exc)) and _retry_count == 0:
@@ -193,8 +182,8 @@ class MercuryAPI:
             _LOGGER.error("Error normalizing weekly summary data: %s", exc)
             return {}
 
-    async def get_monthly_summary(self, _retry_count: int = 0) -> dict[str, Any]:
-        """Get monthly summary data from Mercury Energy using pymercury."""
+    async def get_monthly_summary(self, _retry_count: int = 0) -> dict[str, dict[str, Any]]:
+        """Get monthly summary data per electricity ICP (v2.0.0 multi-ICP)."""
         _LOGGER.debug("Getting monthly summary data... (retry count: %d)", _retry_count)
 
         if not self._authenticated or not self._client:
@@ -206,58 +195,43 @@ class MercuryAPI:
 
         try:
             loop = asyncio.get_event_loop()
-            _LOGGER.info("Getting monthly summary data using pymercury...")
+            _LOGGER.info("Getting monthly summary data (multi-ICP)...")
 
-            # Get account information first
             complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
-
             if not complete_data:
                 _LOGGER.error("No account data available for monthly summary")
                 return {}
 
-            # Extract required IDs
             customer_id = complete_data.customer_id
             account_id = complete_data.account_ids[0] if complete_data.account_ids else None
-
-            # Find electricity service
-            electricity_service = None
-            for service in complete_data.services:
-                if service.is_electricity:
-                    electricity_service = service
-                    break
-
-            if not electricity_service:
-                _LOGGER.error("No electricity service found for monthly summary")
+            if not customer_id or not account_id:
+                _LOGGER.error("Missing customer_id or account_id for monthly summary")
                 return {}
 
-            service_id = electricity_service.service_id
-
-            if not customer_id or not account_id or not service_id:
-                _LOGGER.error("Missing required IDs for monthly summary")
+            electricity_services = [s for s in complete_data.services if s.is_electricity]
+            if not electricity_services:
+                _LOGGER.error("No electricity services found for monthly summary")
                 return {}
 
-            _LOGGER.info("Using pymercury get_electricity_summary for customer:%s, account:%s, service:%s",
-                        customer_id, account_id, service_id)
+            per_service: dict[str, dict[str, Any]] = {}
+            for service in electricity_services:
+                service_id = service.service_id
+                _LOGGER.info("Monthly summary for service_id=%s", service_id)
 
-            # Use pymercury's built-in get_electricity_summary method
-            # This method automatically handles the asOfDate parameter (defaults to today)
-            electricity_summary = await loop.run_in_executor(
-                None,
-                self._client._api_client.get_electricity_summary,
-                customer_id, account_id, service_id
-            )
+                electricity_summary = await loop.run_in_executor(
+                    None,
+                    self._client._api_client.get_electricity_summary,
+                    customer_id, account_id, service_id,
+                )
+                if not electricity_summary:
+                    _LOGGER.warning("No monthly summary returned for service_id=%s", service_id)
+                    continue
 
-            if not electricity_summary:
-                _LOGGER.error("No electricity summary data returned")
-                return {}
+                normalized = self._normalize_electricity_summary_data(electricity_summary)
+                if normalized:
+                    per_service[service_id] = normalized
 
-            _LOGGER.info("Successfully retrieved electricity summary")
-            _LOGGER.debug("Raw summary data: %s", electricity_summary)
-
-            # Normalize the summary data using pymercury's ElectricitySummary object
-            normalized_summary = self._normalize_electricity_summary_data(electricity_summary)
-            _LOGGER.debug("Normalized summary data: %s", normalized_summary)
-            return normalized_summary
+            return per_service
 
         except Exception as exc:
             if ("Tokens expired" in str(exc) or "refresh failed" in str(exc)) and _retry_count == 0:
@@ -450,9 +424,8 @@ class MercuryAPI:
 
         try:
             loop = asyncio.get_event_loop()
-            _LOGGER.info("Getting electricity plans data...")
+            _LOGGER.info("Getting electricity plans data (multi-ICP)...")
 
-            # Get account information
             complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
             if not complete_data:
                 _LOGGER.error("No account data available")
@@ -460,98 +433,53 @@ class MercuryAPI:
 
             customer_id = complete_data.customer_id
             account_id = complete_data.account_ids[0] if complete_data.account_ids else None
-
             if not customer_id or not account_id:
                 _LOGGER.error("Missing customer_id or account_id")
                 return {}
 
-            # Find electricity service (plans need service_id, like usage data)
-            electricity_service = None
-            for service in complete_data.services:
-                if service.is_electricity:
-                    electricity_service = service
-                    break
-
-            if not electricity_service:
-                _LOGGER.error("No electricity service found for plans data")
+            electricity_services = [s for s in complete_data.services if s.is_electricity]
+            if not electricity_services:
+                _LOGGER.error("No electricity services found for plans data")
                 return {}
 
-            service_id = electricity_service.service_id
+            per_service: dict[str, dict[str, Any]] = {}
 
-            # Diagnostic pre-check (issue #6 follow-up).
-            # pymercury's get_electricity_plans silently returns None on three
-            # internal failure paths: (A) get_services no match, (B) identifier
-            # missing, (C) HTTP non-200. pymercury's own _log only print()s when
-            # verbose=True, so HA never captures its diagnostics. These two INFO
-            # lines surface the same data so the user can see which mode fired.
-            icp_from_complete_data = None
-            try:
-                if hasattr(electricity_service, 'raw_data'):
-                    icp_from_complete_data = electricity_service.raw_data.get('identifier')
-            except Exception as raw_data_err:  # pylint: disable=broad-except
-                # raw_data may not be a dict (custom object without .get) —
-                # log at DEBUG so the failure isn't silently masked.
-                _LOGGER.debug(
-                    "Mercury plans diagnostic: failed to read raw_data.identifier: %s",
-                    raw_data_err,
-                )
-            _LOGGER.info(
-                "Mercury plans diagnostic: service_id=%s, service_group=%s, identifier-from-complete_data=%r",
-                service_id,
-                getattr(electricity_service, 'service_group', '?'),
-                icp_from_complete_data,
-            )
-
-            try:
-                services_for_plans = await loop.run_in_executor(
-                    None,
-                    lambda: self._client._api_client.get_services(customer_id, account_id),
-                )
-                matching = next(
-                    (s for s in (services_for_plans or [])
-                     if s.service_id == service_id
-                     and s.service_group.lower() == 'electricity'),
-                    None,
-                )
-                icp_from_get_services = (
-                    matching.raw_data.get('identifier') if matching else None
-                )
+            for electricity_service in electricity_services:
+                service_id = electricity_service.service_id
                 _LOGGER.info(
-                    "Mercury plans diagnostic: get_services returned %d service(s); matched-for-our-service_id=%s; identifier-from-get_services=%r",
-                    len(services_for_plans or []),
-                    bool(matching),
-                    icp_from_get_services,
-                )
-            except Exception as diag_err:  # pylint: disable=broad-except
-                _LOGGER.warning(
-                    "Mercury plans diagnostic: get_services pre-check failed: %s",
-                    diag_err,
+                    "Mercury plans: fetching for service_id=%s, service_group=%s",
+                    service_id,
+                    getattr(electricity_service, 'service_group', '?'),
                 )
 
-            # Try to get plans using pymercury
-            try:
-                if hasattr(self._client, '_api_client') and hasattr(self._client._api_client, 'get_electricity_plans'):
-                    plans = await loop.run_in_executor(
-                        None,
-                        lambda: self._client._api_client.get_electricity_plans(customer_id, account_id, service_id)
+                try:
+                    if hasattr(self._client, '_api_client') and hasattr(self._client._api_client, 'get_electricity_plans'):
+                        plans = await loop.run_in_executor(
+                            None,
+                            lambda sid=service_id: self._client._api_client.get_electricity_plans(customer_id, account_id, sid),
+                        )
+                    else:
+                        _LOGGER.warning("Electricity plans method not available in pymercury")
+                        continue
+                except Exception as api_err:
+                    _LOGGER.error(
+                        "Error calling electricity plans API for service_id=%s: %s",
+                        service_id, api_err,
                     )
-                else:
-                    _LOGGER.warning("Electricity plans method not available in pymercury")
-                    return {}
-            except Exception as api_err:
-                _LOGGER.error("Error calling electricity plans API: %s", api_err)
-                return {}
+                    continue
 
-            if not plans:
-                _LOGGER.warning(
-                    "No electricity plans data returned. The diagnostic INFO lines above "
-                    "show the failure mode: (A) get_services empty / no match, (B) identifier missing, "
-                    "or (C) electricity_plans HTTP non-200."
-                )
-                return {}
+                if not plans:
+                    _LOGGER.warning(
+                        "No electricity plans data returned for service_id=%s",
+                        service_id,
+                    )
+                    continue
 
-            _LOGGER.info("Successfully retrieved electricity plans")
-            return self._normalize_plans_data(plans)
+                normalized = self._normalize_plans_data(plans)
+                if normalized:
+                    per_service[service_id] = normalized
+
+            return per_service
 
         except Exception as exc:
             if ("Tokens expired" in str(exc) or "refresh failed" in str(exc)) and _retry_count == 0:
@@ -802,8 +730,16 @@ class MercuryAPI:
             _LOGGER.error("❌ Error normalizing usage content data: %s", exc)
             return {}
 
-    async def get_usage_data(self, _retry_count: int = 0) -> dict[str, Any]:
-        """Get comprehensive usage data from Mercury Energy using ElectricityUsage."""
+    async def get_usage_data(self, _retry_count: int = 0) -> dict[str, dict[str, Any]]:
+        """Get usage data per electricity ICP (v2.0.0 multi-ICP).
+
+        Returns {service_id: per_service_dict} keyed by electricity service_id.
+        Each per-service dict has the same keys as v1.5.x's flat return
+        (total_usage, energy_usage, current_bill, daily_usage_history, etc.)
+        — only the OUTER dict shape changes.
+
+        Empty dict if no electricity services found.
+        """
         _LOGGER.debug("Getting usage data... (retry count: %d)", _retry_count)
 
         if not self._authenticated or not self._client:
@@ -815,98 +751,84 @@ class MercuryAPI:
 
         try:
             loop = asyncio.get_event_loop()
-            _LOGGER.info("Getting electricity usage data...")
+            _LOGGER.info("Getting electricity usage data (multi-ICP)...")
 
-            # Get account information first
             complete_data = await loop.run_in_executor(None, self._client.get_complete_account_data)
-
             if not complete_data:
                 _LOGGER.error("❌ No account data available")
                 return {}
 
-            # Extract required IDs
             customer_id = complete_data.customer_id
             account_id = complete_data.account_ids[0] if complete_data.account_ids else None
 
-            # Find electricity service
-            electricity_service = None
-            for service in complete_data.services:
-                if service.is_electricity:
-                    electricity_service = service
-                    break
-
-            if not electricity_service:
-                _LOGGER.error("❌ No electricity service found")
+            electricity_services = [s for s in complete_data.services if s.is_electricity]
+            if not electricity_services:
+                _LOGGER.error("❌ No electricity services found")
                 return {}
 
-            service_id = electricity_service.service_id
-            _LOGGER.info("🔍 Using IDs: customer_id=%s, account_id=%s, service_id=%s",
-                        customer_id, account_id, service_id)
-
-            # Get electricity usage data (default period - Mercury API determines the range)
-            _LOGGER.info("📅 Requesting electricity usage data with default parameters")
-
-            electricity_usage = await loop.run_in_executor(
-                None,
-                self._client._api_client.get_electricity_usage,
-                customer_id, account_id, service_id
+            _LOGGER.info(
+                "🔍 Iterating %d electricity service(s): %s",
+                len(electricity_services),
+                [s.service_id for s in electricity_services],
             )
 
-            if not electricity_usage:
-                _LOGGER.error("❌ No electricity usage data returned from get_electricity_usage API call")
-                _LOGGER.error("❌ This could indicate:")
-                _LOGGER.error("   - Authentication issues")
-                _LOGGER.error("   - Account has no electricity service")
-                _LOGGER.error("   - Mercury API is experiencing issues")
-                _LOGGER.error("   - Customer ID, Account ID, or Service ID are incorrect")
-                _LOGGER.error("❌ Returning empty usage data - sensors will show 0 values")
-                return {}
+            per_service: dict[str, dict[str, Any]] = {}
 
-            _LOGGER.info("✅ Received ElectricityUsage: %s data points, %.2f kWh total",
-                        electricity_usage.data_points, electricity_usage.total_usage)
+            for service in electricity_services:
+                service_id = service.service_id
+                _LOGGER.info("📅 Fetching electricity usage for service_id=%s", service_id)
 
-            # 🔍 DEBUG: Log how many days Mercury API actually provides
-            if electricity_usage.daily_usage:
-                _LOGGER.info("🔍 Mercury API provided %d daily entries:", len(electricity_usage.daily_usage))
-                _LOGGER.info("   📅 First day: %s", electricity_usage.daily_usage[0].get('date', 'N/A'))
-                _LOGGER.info("   📅 Last day: %s", electricity_usage.daily_usage[-1].get('date', 'N/A'))
-                _LOGGER.info("   📅 Usage period: %s", electricity_usage.usage_period)
-                _LOGGER.info("   📅 Days in period: %s", electricity_usage.days_in_period)
+                electricity_usage = await loop.run_in_executor(
+                    None,
+                    self._client._api_client.get_electricity_usage,
+                    customer_id, account_id, service_id,
+                )
 
-                        # Process ElectricityUsage object into normalized data
-            normalized_data = self._process_electricity_usage(electricity_usage)
+                if not electricity_usage:
+                    _LOGGER.warning(
+                        "⚠️ No usage data returned for service_id=%s — skipping this ICP",
+                        service_id,
+                    )
+                    continue
 
-            # Get hourly usage data
-            hourly_result = await self._execute_api_call_with_fallback(
-                self._client._api_client.get_electricity_usage_hourly,
-                customer_id, account_id, service_id,
-                "hourly_usage", "hourly_usage_history",
-                "Getting hourly electricity usage...",
-                "Hourly usage: %.2f kWh (%d data points, %d history entries)",
-                "Could not get hourly usage: %s"
+                _LOGGER.info(
+                    "✅ ICP %s: %s data points, %.2f kWh total",
+                    service_id, electricity_usage.data_points, electricity_usage.total_usage,
+                )
+
+                normalized_data = self._process_electricity_usage(electricity_usage)
+
+                hourly_result = await self._execute_api_call_with_fallback(
+                    self._client._api_client.get_electricity_usage_hourly,
+                    customer_id, account_id, service_id,
+                    "hourly_usage", "hourly_usage_history",
+                    f"Getting hourly usage for ICP {service_id}...",
+                    "Hourly usage: %.2f kWh (%d data points, %d history entries)",
+                    "Could not get hourly usage: %s",
+                )
+                normalized_data.update(hourly_result)
+
+                monthly_result = await self._execute_api_call_with_fallback(
+                    self._client._api_client.get_electricity_usage_monthly,
+                    customer_id, account_id, service_id,
+                    "monthly_usage", "monthly_usage_history",
+                    f"Getting monthly usage for ICP {service_id}...",
+                    "Monthly usage: %.2f kWh (%d data points, %d monthly billing periods)",
+                    "Could not get monthly usage: %s",
+                )
+                normalized_data.update(monthly_result)
+
+                normalized_data["customer_id"] = customer_id
+                from datetime import datetime
+                normalized_data["last_updated"] = datetime.now().isoformat()
+
+                per_service[service_id] = normalized_data
+
+            _LOGGER.info(
+                "✅ Multi-ICP fetch complete: %d service(s) populated",
+                len(per_service),
             )
-            normalized_data.update(hourly_result)
-
-            # Get monthly usage data
-            monthly_result = await self._execute_api_call_with_fallback(
-                self._client._api_client.get_electricity_usage_monthly,
-                customer_id, account_id, service_id,
-                "monthly_usage", "monthly_usage_history",
-                "Getting monthly electricity usage for extended history...",
-                "Monthly usage: %.2f kWh (%d data points, %d monthly billing periods)",
-                "Could not get monthly usage: %s"
-            )
-            normalized_data.update(monthly_result)
-
-            # Add customer info
-            normalized_data["customer_id"] = customer_id
-
-            # Set current timestamp
-            from datetime import datetime
-            normalized_data["last_updated"] = datetime.now().isoformat()
-
-            _LOGGER.info("✅ All electricity usage data retrieved: %s", {k: v for k, v in normalized_data.items() if k not in ['daily_usage_history', 'temperature_history', 'hourly_usage_history', 'monthly_usage_history']})
-            return normalized_data
+            return per_service
 
         except Exception as exc:
             # Check if it's a token expiration error and we haven't already retried
@@ -953,48 +875,53 @@ class MercuryAPI:
                 complete_data.account_ids[0] if complete_data.account_ids else None
             )
 
-            gas_service = None
-            for service in complete_data.services:
-                if service.is_gas:
-                    gas_service = service
-                    break
-
-            if not gas_service:
-                _LOGGER.debug("No gas service found; skipping gas usage fetch")
+            gas_services = [s for s in complete_data.services if s.is_gas]
+            if not gas_services:
+                _LOGGER.debug("No gas services found; skipping gas usage fetch")
                 return {}
 
             customer_id = complete_data.customer_id
-            service_id = gas_service.service_id
+            per_service: dict[str, dict[str, Any]] = {}
 
-            gas_monthly = await loop.run_in_executor(
-                None,
-                self._client._api_client.get_gas_usage_monthly,
-                customer_id, account_id, service_id,
-            )
+            for gas_service in gas_services:
+                service_id = gas_service.service_id
+                _LOGGER.info(
+                    "Mercury gas: fetching monthly usage for service_id=%s",
+                    service_id,
+                )
 
-            if not gas_monthly:
-                _LOGGER.warning("Mercury get_gas_usage_monthly returned None")
-                return {}
+                gas_monthly = await loop.run_in_executor(
+                    None,
+                    self._client._api_client.get_gas_usage_monthly,
+                    customer_id, account_id, service_id,
+                )
 
-            # Each entry in gas_monthly.daily_usage represents an INVOICE PERIOD
-            # (typically one month) — name is misleading because pymercury reuses
-            # ServiceUsage's daily_usage list regardless of the request interval.
-            monthly_history = list(getattr(gas_monthly, "daily_usage", []) or [])
+                if not gas_monthly:
+                    _LOGGER.warning(
+                        "Mercury get_gas_usage_monthly returned None for service_id=%s",
+                        service_id,
+                    )
+                    continue
 
-            _LOGGER.info(
-                "Mercury gas: %d monthly entries, %.2f kWh total, $%.2f total",
-                len(monthly_history),
-                getattr(gas_monthly, "total_usage", 0) or 0,
-                getattr(gas_monthly, "total_cost", 0) or 0,
-            )
+                monthly_history = list(getattr(gas_monthly, "daily_usage", []) or [])
 
-            return {
-                "monthly_usage": round(float(getattr(gas_monthly, "total_usage", 0) or 0), DECIMAL_PLACES),
-                "monthly_cost": round(float(getattr(gas_monthly, "total_cost", 0) or 0), DECIMAL_PLACES),
-                "monthly_data_points": getattr(gas_monthly, "data_points", 0),
-                "monthly_usage_history": monthly_history,
-                "service_id": service_id,
-            }
+                _LOGGER.info(
+                    "Mercury gas (ICP %s): %d monthly entries, %.2f kWh total, $%.2f total",
+                    service_id,
+                    len(monthly_history),
+                    getattr(gas_monthly, "total_usage", 0) or 0,
+                    getattr(gas_monthly, "total_cost", 0) or 0,
+                )
+
+                per_service[service_id] = {
+                    "monthly_usage": round(float(getattr(gas_monthly, "total_usage", 0) or 0), DECIMAL_PLACES),
+                    "monthly_cost": round(float(getattr(gas_monthly, "total_cost", 0) or 0), DECIMAL_PLACES),
+                    "monthly_data_points": getattr(gas_monthly, "data_points", 0),
+                    "monthly_usage_history": monthly_history,
+                    "service_id": service_id,
+                }
+
+            return per_service
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.error("Mercury gas usage fetch failed: %s", exc, exc_info=True)
             return {}

@@ -1,24 +1,28 @@
 """Mercury Energy NZ sensor platform."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     DOMAIN,
     SENSOR_TYPES,
+    ICP_SCOPED_SENSOR_TYPES,
     DEFAULT_NAME,
     CONF_EMAIL,
     CHART_ATTRIBUTE_DAILY_DAYS,
     CHART_ATTRIBUTE_HOURLY_HOURS,
 )
 from .coordinator import MercuryDataUpdateCoordinator
+from .statistics import _sanitize_for_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,31 +32,59 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Mercury Energy sensors from a config entry."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]
+    """Set up Mercury Energy sensors from a config entry (v2.0.0 multi-ICP).
 
-    entities = []
+    Account-scoped sensors (bill_*, weekly_*, monthly_*, customer_id) get a
+    single instance attached to the parent "Mercury Account" device. ICP-scoped
+    sensors (defined in const.py:ICP_SCOPED_SENSOR_TYPES) get one instance per
+    discovered electricity ICP — primary keeps legacy unique_id; secondary
+    ICPs get ICP-token-prefixed entity_ids.
+    """
+    coordinator: MercuryDataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id]
+
+    # If first-cycle ICP discovery hasn't completed, raise ConfigEntryNotReady
+    # so HA retries setup automatically. Avoids "no devices appear until manual
+    # restart" UX gap.
+    if not coordinator._discovered and not coordinator.last_update_success:
+        raise ConfigEntryNotReady(
+            "Mercury CO NZ: ICP discovery not yet complete; HA will retry"
+        )
+
+    name = config_entry.data.get(CONF_NAME, DEFAULT_NAME)
+    email = config_entry.data[CONF_EMAIL]
+    entities: list[MercurySensor] = []
+
+    # Account-scoped sensors — single instance per account, attached to parent device
     for sensor_type in SENSOR_TYPES:
+        if sensor_type in ICP_SCOPED_SENSOR_TYPES:
+            continue
         entities.append(
             MercurySensor(
-                coordinator,
-                sensor_type,
-                config_entry.data.get(CONF_NAME, DEFAULT_NAME),
-                config_entry.data[CONF_EMAIL],
+                coordinator, sensor_type, name, email,
+                service_id=None, is_primary=True, fuel_type=None,
             )
         )
 
+    # ICP-scoped sensors — one instance per electricity ICP × ICP-scoped types
+    for service in coordinator._discovered_electricity_services:
+        is_primary = service.service_id == coordinator._primary_service_id
+        for sensor_type in ICP_SCOPED_SENSOR_TYPES:
+            entities.append(
+                MercurySensor(
+                    coordinator, sensor_type, name, email,
+                    service_id=service.service_id,
+                    is_primary=is_primary,
+                    fuel_type="electricity",
+                )
+            )
+
     async_add_entities(entities)
-    # Main chart entity: sensor.mercury_nz_energy_usage (from name "Mercury NZ Energy Usage")
     _LOGGER.info(
-        "Added %d Mercury sensors; primary chart entity is sensor.mercury_nz_energy_usage",
+        "Mercury CO NZ: registered %d entities (account-scoped: %d, ICP-scoped: %d × %d ICPs)",
         len(entities),
-    )
-    # Diagnostic — surfaces which sensor_types the integration tried to register so
-    # users investigating "missing sensor" reports can confirm registration happened.
-    _LOGGER.info(
-        "Mercury CO NZ: registered sensor_types: %s",
-        sorted(e._sensor_type for e in entities),
+        len(SENSOR_TYPES) - len(ICP_SCOPED_SENSOR_TYPES),
+        len(ICP_SCOPED_SENSOR_TYPES),
+        len(coordinator._discovered_electricity_services),
     )
 
 
@@ -65,12 +97,26 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
         sensor_type: str,
         name: str,
         email: str,
+        service_id: str | None = None,
+        is_primary: bool = True,
+        fuel_type: str | None = None,
     ) -> None:
-        """Initialize the sensor."""
+        """Initialize the sensor.
+
+        v2.0.0: ICP-scoped sensors are scoped to a service_id (with is_primary
+        controlling whether the legacy unique_id is preserved). Account-scoped
+        sensors pass service_id=None and attach to the parent device.
+
+        Default args (service_id=None, is_primary=True, fuel_type=None) produce
+        byte-identical unique_id to v1.5.x — back-compat for primary-ICP sensors.
+        """
         super().__init__(coordinator)
 
         self._sensor_type = sensor_type
         self._email = email
+        self._service_id = service_id
+        self._is_primary = is_primary
+        self._fuel_type = fuel_type
 
         # Validate sensor type exists in configuration
         if sensor_type not in SENSOR_TYPES:
@@ -78,33 +124,54 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             raise ValueError(f"Unknown sensor type: {sensor_type}")
 
         sensor_config = SENSOR_TYPES[sensor_type]
-        _LOGGER.debug("🔧 Initializing sensor '%s' with config: %s", sensor_type, sensor_config)
-
-        self._attr_name = f"{name} {sensor_config['name']}"
-        # Use a hash of email for unique_id to handle special characters
-        import hashlib
         email_hash = hashlib.md5(email.encode()).hexdigest()[:8]
-        self._attr_unique_id = f"{email_hash}_{sensor_type}"
 
-        # Force unit assignment to ensure consistency
+        # LOAD-BEARING back-compat: primary-ICP OR account-scoped → legacy unique_id.
+        # Single-ICP existing users see byte-identical entity_id to v1.5.x.
+        if service_id is None or is_primary:
+            self._attr_name = f"{name} {sensor_config['name']}"
+            self._attr_unique_id = f"{email_hash}_{sensor_type}"
+        else:
+            icp_token = _sanitize_for_key(service_id)
+            self._attr_name = f"{name} {service_id} {sensor_config['name']}"
+            self._attr_unique_id = f"{email_hash}_{icp_token}_{sensor_type}"
+
         self._attr_native_unit_of_measurement = sensor_config["unit"]
-
         self._attr_icon = sensor_config["icon"]
         self._attr_device_class = sensor_config.get("device_class")
         self._attr_state_class = sensor_config.get("state_class")
 
-        _LOGGER.debug("📊 Sensor '%s' initialized with unit: %s, device_class: %s, state_class: %s",
-                     sensor_type, self._attr_native_unit_of_measurement,
-                     self._attr_device_class, self._attr_state_class)
-
     @property
     def device_info(self):
-        """Return device information."""
+        """Return device information.
+
+        v2.0.0: Account-scoped sensors attach to the parent device (one per
+        email). ICP-scoped sensors attach to per-ICP child devices linked
+        via via_device. Mirrors HA core's device-hierarchy pattern.
+        """
+        if self._service_id is None:
+            # Account-scoped — parent device
+            return {
+                "identifiers": {(DOMAIN, self._email)},
+                "name": f"Mercury Account - {self._email}",
+                "manufacturer": "Mercury Energy",
+                "model": "Account",
+            }
+        # ICP-scoped — child device with via_device parent
         return {
-            "identifiers": {(DOMAIN, self._email)},
-            "name": f"Mercury NZ - {self._email}",
+            "identifiers": {(DOMAIN, f"{self._email}_{self._service_id}")},
+            "name": (
+                f"Mercury ICP {self._service_id}"
+                + (
+                    f" ({self._fuel_type})"
+                    if self._fuel_type and self._fuel_type != "electricity"
+                    else ""
+                )
+                + (" (primary)" if self._is_primary else "")
+            ),
             "manufacturer": "Mercury Energy",
-            "model": "Energy Monitor",
+            "model": f"{(self._fuel_type or 'electricity').title()} Meter",
+            "via_device": (DOMAIN, self._email),
         }
 
     @property
@@ -149,7 +216,18 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             else:
                 return None
 
-        raw_value = self.coordinator.data.get(self._sensor_type)
+        # v2.0.0: ICP-scoped non-primary sensors read from icp_<token>_<key>
+        # in coordinator.data. Account-scoped or primary-ICP sensors read
+        # from top-level keys (back-compat with v1.5.x).
+        if (
+            self._service_id is not None
+            and not self._is_primary
+            and self._sensor_type in ICP_SCOPED_SENSOR_TYPES
+        ):
+            icp_token = _sanitize_for_key(self._service_id)
+            raw_value = self.coordinator.data.get(f"icp_{icp_token}_{self._sensor_type}")
+        else:
+            raw_value = self.coordinator.data.get(self._sensor_type)
         _LOGGER.debug("🔍 Sensor %s: Raw value = %s (type: %s)", self._sensor_type, raw_value, type(raw_value))
 
         # If raw_value is None, log for debugging and return appropriate default
