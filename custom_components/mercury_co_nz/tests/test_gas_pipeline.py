@@ -243,3 +243,42 @@ def test_monthly_entries_empty_input_returns_empty() -> None:
     assert energy == []
     assert cost == []
     assert skipped == 0
+
+
+# ----------------------------------------------------------------------------
+# v2.0.0 — multi-ICP × gas composition
+# ----------------------------------------------------------------------------
+
+
+def test_gas_importer_with_secondary_icp_has_compound_store_key() -> None:
+    """Gas + non-primary ICP must have BOTH fuel and icp suffixes in the
+    Store key so the lock doesn't collide with primary gas or other gas ICPs."""
+    hass = MagicMock()
+    hass.async_create_task = _consume_coro
+    hass.config.currency = "NZD"
+    gas_secondary = MercuryStatisticsImporter(
+        hass,
+        "user@example.com",
+        fuel_type="gas",
+        service_id="ICP_GAS_002",
+        is_primary=False,
+    )
+    assert "_gas_" in gas_secondary._store.key
+    assert "icp_gas_002" in gas_secondary._store.key.lower()
+
+
+def test_gas_primary_icp_back_compat_store_key_unchanged() -> None:
+    """LOAD-BEARING: gas primary ICP Store key must match v1.4.1 byte-for-byte —
+    the existing fuel_type='gas' construction with default service_id/is_primary
+    produces f"{DOMAIN}_statistics_gas_{email_hash}" as before, no icp suffix.
+    """
+    from custom_components.mercury_co_nz.const import DOMAIN
+
+    hass = MagicMock()
+    hass.async_create_task = _consume_coro
+    hass.config.currency = "NZD"
+    # Default is_primary=True, service_id=None
+    gas_primary = MercuryStatisticsImporter(
+        hass, "user@example.com", fuel_type="gas"
+    )
+    assert gas_primary._store.key == f"{DOMAIN}_statistics_gas_{gas_primary._email_hash}"
