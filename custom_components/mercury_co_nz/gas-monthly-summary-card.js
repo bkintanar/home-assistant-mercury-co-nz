@@ -23,12 +23,25 @@ class MercuryGasMonthlySummaryCard extends LitElement {
         color: white;
       }
 
-      /* Description on line 1 (with 🔥 prefix), $X.XX | XXX kWh on line 2 —
-         restoring the v1.6.0 stacked layout per user feedback in v1.6.3. */
+      /* Two-line layout with emoji as a left column:
+           🔥 Your gas usage for this billing period
+              $X.XX | XXX kWh
+         Both text lines start at the same x-offset; the emoji sits
+         to the left, vertically aligned to the top so it tracks the
+         first line. */
+      .usage-details {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+      }
       .fire-emoji {
-        margin-right: 6px;
         font-size: 16px;
-        line-height: 1;
+        line-height: 1.2;
+        flex-shrink: 0;
+      }
+      .usage-text {
+        flex: 1;
+        min-width: 0;
       }
     `
   ];
@@ -462,10 +475,11 @@ class MercuryGasMonthlySummaryCard extends LitElement {
             <div class="data-info">
               ${this._selectedDate ? html`
                 <div class="usage-details">
-                  <div class="usage-date">
-                    <span class="fire-emoji">🔥</span>Your gas usage for this billing period
+                  <span class="fire-emoji">🔥</span>
+                  <div class="usage-text">
+                    <div class="usage-date">Your gas usage for this billing period</div>
+                    <div class="usage-stats">$${this._selectedDate.cost.toFixed(2)} | ${this._selectedDate.consumption.toFixed(2)} kWh</div>
                   </div>
-                  <div class="usage-stats">$${this._selectedDate.cost.toFixed(2)} | ${this._selectedDate.consumption.toFixed(2)} kWh</div>
                 </div>
               ` : html`Loading...`}
             </div>
@@ -540,7 +554,7 @@ if (window.customCards) {
 }
 
 console.info(
-  '%c MERCURY-GAS-MONTHLY-SUMMARY-CARD %c v1.6.3 ',
+  '%c MERCURY-GAS-MONTHLY-SUMMARY-CARD %c v1.6.4 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
