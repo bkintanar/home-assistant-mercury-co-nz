@@ -359,7 +359,6 @@ ICP_SCOPED_SENSOR_TYPES: Final[frozenset[str]] = frozenset({
 NZ_TIMEZONE: Final[str] = "Pacific/Auckland"
 STATISTICS_BACKFILL_DAYS: Final[int] = 180  # matches the daily JSON retention cap
 STATISTICS_HOURLY_RETENTION_DAYS: Final[int] = 180  # hourly cache retention; matches daily cap so Energy Dashboard hourly profile spans the same window
-STATISTICS_REIMPORT_DAYS: Final[int] = 3  # always re-import last N days to absorb Mercury bill corrections
 STATISTICS_FAILURE_NOTIFICATION_THRESHOLD: Final[int] = 3  # consecutive failures before user-visible notification
 STATISTICS_FAILURE_BACKOFF_THRESHOLD: Final[int] = 12  # consecutive failures (≈1 hour) before stopping retries
 

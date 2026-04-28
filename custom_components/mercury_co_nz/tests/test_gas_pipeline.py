@@ -22,6 +22,7 @@ from custom_components.mercury_co_nz.const import (
     STATISTICS_GAS_CONSUMPTION_SUFFIX,
     STATISTICS_GAS_COST_SUFFIX,
 )
+from custom_components.mercury_co_nz.mercury_api import _collapse_gas_pairs
 from custom_components.mercury_co_nz.statistics import MercuryStatisticsImporter
 
 
@@ -282,3 +283,199 @@ def test_gas_primary_icp_back_compat_store_key_unchanged() -> None:
         hass, "user@example.com", fuel_type="gas"
     )
     assert gas_primary._store.key == f"{DOMAIN}_statistics_gas_{gas_primary._email_hash}"
+
+
+# ----------------------------------------------------------------------------
+# v1.5.2 — _collapse_gas_pairs (Mercury parallel estimate/actual pair handling)
+# ----------------------------------------------------------------------------
+
+
+def _pair_record(
+    invoice_from: str,
+    invoice_to: str,
+    consumption: float,
+    cost: float,
+    is_estimated: bool,
+) -> dict:
+    """Build a pymercury 1.1.2-shaped record (one half of an estimate/actual pair)."""
+    return {
+        "date": invoice_to,
+        "consumption": consumption,
+        "cost": cost,
+        "free_power": False,
+        "invoice_from": invoice_from,
+        "invoice_to": invoice_to,
+        "is_estimated": is_estimated,
+        "read_type": "estimate" if is_estimated else "actual",
+    }
+
+
+def test_collapse_picks_actual_when_estimate_pair_is_zero() -> None:
+    """For 27 March (the user's reported anchor), Mercury returns
+    estimate=0/actual=460 — the collapse must pick the actual entry."""
+    pairs = [
+        _pair_record("2026-02-27", "2026-03-27", 0, 0, is_estimated=True),
+        _pair_record("2026-02-27", "2026-03-27", 460, 156.28, is_estimated=False),
+    ]
+    collapsed = _collapse_gas_pairs(pairs)
+    assert len(collapsed) == 1
+    assert collapsed[0]["consumption"] == 460
+    assert collapsed[0]["is_estimated"] is False
+
+
+def test_collapse_picks_estimate_when_actual_pair_is_zero() -> None:
+    """For 26 February in the user's data, Mercury returns
+    estimate=397/actual=0 — the v1.5.1 bucketize-overwrite bug dropped the
+    real value to zero. Collapse must keep the non-zero estimate."""
+    pairs = [
+        _pair_record("2026-01-31", "2026-02-26", 397, 139.20, is_estimated=True),
+        _pair_record("2026-01-31", "2026-02-26", 0, 0, is_estimated=False),
+    ]
+    collapsed = _collapse_gas_pairs(pairs)
+    assert len(collapsed) == 1
+    assert collapsed[0]["consumption"] == 397
+    assert collapsed[0]["is_estimated"] is True
+
+
+def test_collapse_full_year_real_shape_sums_to_total_usage() -> None:
+    """Captured-shape regression: 10 billing periods × 2 groups → 10 collapsed
+    entries summing to 4842 kWh (the user's real annual gas consumption)."""
+    pairs = [
+        # period: (invoice_from, invoice_to, est, act, real_value, tag)
+        _pair_record("2025-06-14", "2025-07-01",   0,   0.00, True),
+        _pair_record("2025-06-14", "2025-07-01", 324,  91.08, False),
+        _pair_record("2025-07-02", "2025-07-30", 517, 145.86, True),
+        _pair_record("2025-07-02", "2025-07-30",   0,   0.00, False),
+        _pair_record("2025-07-31", "2025-08-29",   0,   0.00, True),
+        _pair_record("2025-07-31", "2025-08-29", 539, 151.61, False),
+        _pair_record("2025-08-30", "2025-09-30", 571, 183.68, True),
+        _pair_record("2025-08-30", "2025-09-30",   0,   0.00, False),
+        _pair_record("2025-10-01", "2025-10-30",   0,   0.00, True),
+        _pair_record("2025-10-01", "2025-10-30", 635, 193.68, False),
+        _pair_record("2025-10-31", "2025-11-27",   0,   0.00, True),
+        _pair_record("2025-10-31", "2025-11-27", 463, 154.67, False),
+        _pair_record("2025-11-28", "2025-12-27", 493, 165.11, True),
+        _pair_record("2025-11-28", "2025-12-27",   0,   0.00, False),
+        _pair_record("2025-12-28", "2026-01-30",   0,   0.00, True),
+        _pair_record("2025-12-28", "2026-01-30", 443, 163.84, False),
+        _pair_record("2026-01-31", "2026-02-26", 397, 139.20, True),
+        _pair_record("2026-01-31", "2026-02-26",   0,   0.00, False),
+        _pair_record("2026-02-27", "2026-03-27",   0,   0.00, True),
+        _pair_record("2026-02-27", "2026-03-27", 460, 156.28, False),
+    ]
+    collapsed = _collapse_gas_pairs(pairs)
+    assert len(collapsed) == 10
+    assert sum(c["consumption"] for c in collapsed) == 4842
+    # Order is chronological by invoice_to.
+    assert [c["invoice_to"] for c in collapsed] == sorted(
+        c["invoice_to"] for c in collapsed
+    )
+
+
+def test_collapse_tie_break_prefers_actual() -> None:
+    """If Mercury ever returns equal non-zero values for both groups (a
+    reissued read), pick the actual."""
+    pairs = [
+        _pair_record("2026-01-01", "2026-01-31", 100, 30, is_estimated=True),
+        _pair_record("2026-01-01", "2026-01-31", 100, 30, is_estimated=False),
+    ]
+    collapsed = _collapse_gas_pairs(pairs)
+    assert len(collapsed) == 1
+    assert collapsed[0]["is_estimated"] is False
+
+
+def test_collapse_picks_larger_when_both_non_zero() -> None:
+    """Defensive: if Mercury sends both with different non-zero values,
+    pick the larger (likely the corrected/finalized read)."""
+    pairs = [
+        _pair_record("2026-01-01", "2026-01-31",  50, 15, is_estimated=True),
+        _pair_record("2026-01-01", "2026-01-31",  75, 22, is_estimated=False),
+    ]
+    collapsed = _collapse_gas_pairs(pairs)
+    assert len(collapsed) == 1
+    assert collapsed[0]["consumption"] == 75
+
+
+def test_collapse_passes_through_unpaired_records() -> None:
+    """Single-group payloads (no estimate/actual structure) are returned
+    chronologically, one entry per period."""
+    pairs = [
+        _pair_record("2026-02-01", "2026-02-28", 80, 20, is_estimated=False),
+        _pair_record("2026-01-01", "2026-01-31", 60, 15, is_estimated=False),
+    ]
+    collapsed = _collapse_gas_pairs(pairs)
+    assert len(collapsed) == 2
+    assert collapsed[0]["invoice_to"] == "2026-01-31"
+    assert collapsed[1]["invoice_to"] == "2026-02-28"
+
+
+def test_collapse_empty_input_returns_empty() -> None:
+    assert _collapse_gas_pairs([]) == []
+
+
+# ----------------------------------------------------------------------------
+# v1.5.2 — sum-baseline regression: most-recent imported entry must NOT be
+# re-emitted (caused 460 × N compounding for the 27 March gas dashboard bar)
+# ----------------------------------------------------------------------------
+
+
+def test_monthly_entries_skip_anchor_at_cutoff_to_prevent_compounding() -> None:
+    """Regression: when cutoff_ts equals the timestamp of an entry already
+    in the recorder, that entry MUST be skipped. `energy_sum_start` is the
+    recorder's cumulative sum *through* that anchor, so re-adding its kwh
+    would double-count and inflate by N×kwh after N coordinator cycles —
+    the v1.5.1 "164,220 kWh on 27 Mar" symptom."""
+    march_anchor = datetime(2026, 3, 26, 11, 0, 0, tzinfo=timezone.utc)
+    records = [
+        _record("2026-03-27T00:00:00+13:00", 460.0, 156.28),  # anchor == cutoff
+    ]
+    energy, _cost, skipped = MercuryStatisticsImporter._build_monthly_entries(
+        records,
+        energy_sum_start=2864.0,    # recorder's sum through March 27 (incl.)
+        cost_sum_start=900.0,
+        cutoff_ts=march_anchor.timestamp(),
+    )
+    assert skipped == 0  # null_skip only counts parse failures
+    assert energy == []  # no re-emission — would compound otherwise
+
+
+def test_monthly_entries_emit_only_strictly_newer_than_cutoff() -> None:
+    """Entries older than cutoff are skipped, equal-to-cutoff is skipped
+    (already-imported boundary), strictly-newer is emitted with sum
+    accumulating correctly from the carry-over."""
+    feb_anchor = datetime(2026, 2, 25, 11, 0, 0, tzinfo=timezone.utc)
+    records = [
+        _record("2026-02-26T00:00:00+13:00", 397.0, 139.20),  # at cutoff
+        _record("2026-03-27T00:00:00+13:00", 460.0, 156.28),  # > cutoff
+    ]
+    energy, _cost, skipped = MercuryStatisticsImporter._build_monthly_entries(
+        records,
+        energy_sum_start=2404.0,
+        cost_sum_start=750.0,
+        cutoff_ts=feb_anchor.timestamp(),
+    )
+    assert skipped == 0
+    assert len(energy) == 1
+    assert energy[0]["state"] == 460.0
+    assert energy[0]["sum"] == 2404.0 + 460.0
+
+
+def test_hourly_entries_skip_slot_at_cutoff_to_prevent_compounding() -> None:
+    """Same regression as monthly, for the electricity hourly path. A slot
+    whose timestamp equals cutoff_ts is already in the recorder's sum
+    baseline; re-emitting it would compound by `kwh` per coordinator
+    cycle until the slot exits the (formerly 3-day) window."""
+    last_slot = datetime(2026, 4, 28, 10, 0, 0, tzinfo=timezone.utc)
+    daily_records = []
+    hourly_records = [
+        {"datetime": "2026-04-28T22:00:00+12:00", "consumption": 1.5, "cost": 0.40},  # NZ-local 22:00 == 10:00 UTC
+    ]
+    energy, _cost, skipped = MercuryStatisticsImporter._build_hourly_entries(
+        daily_records,
+        hourly_records,
+        energy_sum_start=1234.5,
+        cost_sum_start=450.0,
+        cutoff_ts=last_slot.timestamp(),
+    )
+    assert skipped == 0
+    assert energy == []  # no re-emission

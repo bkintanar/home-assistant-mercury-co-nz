@@ -146,7 +146,12 @@ def test_hourly_split_dst_start_23_hour_day() -> None:
 
 
 def test_hourly_split_skips_already_imported() -> None:
-    """Strict less-than cutoff: entries at-or-after cutoff pass; entries before are skipped."""
+    """Cutoff is the timestamp of the last imported slot; that slot AND
+    everything before it are already represented in the recorder's
+    cumulative `sum` baseline, so emitting them would compound.
+
+    v1.5.2 fix: the at-cutoff slot is excluded along with pre-cutoff slots.
+    """
     records = [
         {"date": "2026-05-14T00:00:00", "consumption": 24.0, "cost": 12.0},
         {"date": "2026-05-15T00:00:00", "consumption": 24.0, "cost": 12.0},
@@ -156,10 +161,11 @@ def test_hourly_split_skips_already_imported() -> None:
     energy, _cost, _ = MercuryStatisticsImporter._build_hourly_entries(
         records, [], 0.0, 0.0, cutoff
     )
-    # The 24 entries from 2026-05-14 are all strictly before cutoff -> skipped.
-    # The 24 entries from 2026-05-15 start at exactly cutoff -> included (not strictly <).
-    assert len(energy) == 24
-    assert energy[0]["start"] >= datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
+    # All 2026-05-14 hours: strictly before cutoff → skipped.
+    # 2026-05-15 hour at exactly cutoff: skipped (already imported).
+    # Remaining 23 hours of 2026-05-15: emitted.
+    assert len(energy) == 23
+    assert energy[0]["start"] > datetime(2026, 5, 14, 12, 0, tzinfo=timezone.utc)
 
 
 def test_hourly_split_counts_null_records() -> None:
