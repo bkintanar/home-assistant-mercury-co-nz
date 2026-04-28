@@ -91,6 +91,15 @@ async def async_setup_entry(
 class MercurySensor(CoordinatorEntity, SensorEntity):
     """Representation of a Mercury Energy sensor."""
 
+    # v1.6.1: Tell HA to compose friendly_name as `{device.name} {entity.name}`
+    # automatically. Together with `_attr_name = sensor_config["name"]` and
+    # `device_info["name"] = self._device_display_name` below, this produces
+    # clean entity_ids like `sensor.mercury_nz_gas_monthly_usage` instead of
+    # the v1.6.0 form `sensor.mercury_nz_<email-slug>_mercury_nz_gas_monthly_usage`
+    # that recent HA versions generate when has_entity_name is False AND
+    # `_attr_name` repeats the device-name prefix.
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: MercuryDataUpdateCoordinator,
@@ -117,6 +126,10 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
         self._service_id = service_id
         self._is_primary = is_primary
         self._fuel_type = fuel_type
+        # The config-entry name (e.g. "Mercury NZ", or a user-customized
+        # "Holiday House"). Used for the device's display name so multi-account
+        # users can still distinguish their Mercury devices in the UI.
+        self._device_display_name = name
 
         # Validate sensor type exists in configuration
         if sensor_type not in SENSOR_TYPES:
@@ -124,16 +137,24 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             raise ValueError(f"Unknown sensor type: {sensor_type}")
 
         sensor_config = SENSOR_TYPES[sensor_type]
+        # Use a hash of email for unique_id to handle special characters.
+        import hashlib
         email_hash = hashlib.md5(email.encode()).hexdigest()[:8]
 
         # LOAD-BEARING back-compat: primary-ICP OR account-scoped → legacy unique_id.
-        # Single-ICP existing users see byte-identical entity_id to v1.5.x.
+        # Single-ICP existing users see byte-identical entity_id to v1.5.x for
+        # entities registered before v1.6.1. v1.6.1's _attr_has_entity_name
+        # pattern means HA composes friendly_name as `{device.name} {_attr_name}`
+        # automatically — so `_attr_name` is just the per-sensor suffix here,
+        # not the doubled "Mercury NZ Foo" form. Secondary ICPs include the
+        # service_id in `_attr_name` so the friendly_name distinguishes them
+        # from primary on the same account.
         if service_id is None or is_primary:
-            self._attr_name = f"{name} {sensor_config['name']}"
+            self._attr_name = sensor_config["name"]
             self._attr_unique_id = f"{email_hash}_{sensor_type}"
         else:
             icp_token = _sanitize_for_key(service_id)
-            self._attr_name = f"{name} {service_id} {sensor_config['name']}"
+            self._attr_name = f"{service_id} {sensor_config['name']}"
             self._attr_unique_id = f"{email_hash}_{icp_token}_{sensor_type}"
 
         self._attr_native_unit_of_measurement = sensor_config["unit"]
@@ -145,15 +166,19 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         """Return device information.
 
-        v2.0.0: Account-scoped sensors attach to the parent device (one per
-        email). ICP-scoped sensors attach to per-ICP child devices linked
-        via via_device. Mirrors HA core's device-hierarchy pattern.
+        v2.0.0 + v1.6.1: account-scoped sensors attach to the parent device
+        (one per email); ICP-scoped sensors attach to per-ICP child devices
+        linked via `via_device`. Neither device.name includes the user's
+        email anymore — HA's entity_id slug pulled the email into every
+        new entity in v1.6.0 era. Multi-account users are still uniquely
+        keyed by the `(DOMAIN, email)` identifier tuple; only the displayed
+        name simplifies.
         """
         if self._service_id is None:
             # Account-scoped — parent device
             return {
                 "identifiers": {(DOMAIN, self._email)},
-                "name": f"Mercury Account - {self._email}",
+                "name": self._device_display_name,
                 "manufacturer": "Mercury Energy",
                 "model": "Account",
             }
@@ -161,7 +186,7 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
         return {
             "identifiers": {(DOMAIN, f"{self._email}_{self._service_id}")},
             "name": (
-                f"Mercury ICP {self._service_id}"
+                f"ICP {self._service_id}"
                 + (
                     f" ({self._fuel_type})"
                     if self._fuel_type and self._fuel_type != "electricity"
