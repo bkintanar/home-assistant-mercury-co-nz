@@ -512,8 +512,12 @@ export const chartLegendStyles = css`
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    background-color: rgb(255, 240, 0); /* PRIMARY_YELLOW */
+    background-color: rgb(255, 240, 0); /* PRIMARY_YELLOW (actual reads) */
     border: 1px solid rgba(0, 0, 0, 0.1);
+  }
+
+  .legend-circle.estimated {
+    background-color: #727272; /* SECONDARY_GRAY (estimated reads) */
   }
 
   .legend-line {
