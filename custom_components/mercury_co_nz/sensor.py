@@ -59,6 +59,15 @@ async def async_setup_entry(
 class MercurySensor(CoordinatorEntity, SensorEntity):
     """Representation of a Mercury Energy sensor."""
 
+    # v1.6.1: Tell HA to compose friendly_name as `{device.name} {entity.name}`
+    # automatically. Together with `_attr_name = sensor_config["name"]` and
+    # `device_info["name"] = self._device_display_name` below, this produces
+    # clean entity_ids like `sensor.mercury_nz_gas_monthly_usage` instead of
+    # the v1.6.0 form `sensor.mercury_nz_<email-slug>_mercury_nz_gas_monthly_usage`
+    # that recent HA versions generate when has_entity_name is False AND
+    # `_attr_name` repeats the device-name prefix.
+    _attr_has_entity_name = True
+
     def __init__(
         self,
         coordinator: MercuryDataUpdateCoordinator,
@@ -71,6 +80,10 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
 
         self._sensor_type = sensor_type
         self._email = email
+        # The config-entry name (e.g. "Mercury NZ", or a user-customized
+        # "Holiday House"). Used for the device's display name so multi-account
+        # users can still distinguish their Mercury devices in the UI.
+        self._device_display_name = name
 
         # Validate sensor type exists in configuration
         if sensor_type not in SENSOR_TYPES:
@@ -80,7 +93,12 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
         sensor_config = SENSOR_TYPES[sensor_type]
         _LOGGER.debug("🔧 Initializing sensor '%s' with config: %s", sensor_type, sensor_config)
 
-        self._attr_name = f"{name} {sensor_config['name']}"
+        # v1.6.1: just the sensor-specific suffix. HA composes the displayed
+        # friendly_name as `{device.name} {_attr_name}` because
+        # `_attr_has_entity_name = True` (above). Pre-v1.6.1 entities keep
+        # their existing entity_ids via HA's entity registry; only NEW entities
+        # get the cleaner slug.
+        self._attr_name = sensor_config["name"]
         # Use a hash of email for unique_id to handle special characters
         import hashlib
         email_hash = hashlib.md5(email.encode()).hexdigest()[:8]
@@ -99,10 +117,18 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self):
-        """Return device information."""
+        """Return device information.
+
+        v1.6.1: device.name no longer includes the user's email so HA's
+        entity_id slug doesn't pull the email into every new entity. The
+        device is still uniquely keyed on `(DOMAIN, email)` via identifiers,
+        so multi-account users still get separate device entries — they just
+        share the same display name. Auto-suffixing on entity_id collisions
+        remains HA's standard behavior.
+        """
         return {
             "identifiers": {(DOMAIN, self._email)},
-            "name": f"Mercury NZ - {self._email}",
+            "name": self._device_display_name,
             "manufacturer": "Mercury Energy",
             "model": "Energy Monitor",
         }
