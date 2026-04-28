@@ -325,3 +325,44 @@ def test_gas_sensor_stays_under_safety_budget() -> None:
         f"gas_monthly_usage attributes are {len(serialized)} bytes; "
         f"safety budget is {SAFETY_BUDGET}"
     )
+
+
+# ----------------------------------------------------------------------------
+# v1.6.1 — has_entity_name + clean entity_id slug regression guard
+# ----------------------------------------------------------------------------
+
+
+def test_v1_6_1_has_entity_name_is_true() -> None:
+    """v1.6.1 sets has_entity_name=True so HA composes friendly_name as
+    `{device.name} {_attr_name}` automatically (clean slug, no doubled
+    'Mercury NZ' or email-included entity_ids)."""
+    sensor = _make_sensor("gas_monthly_usage")
+    assert sensor._attr_has_entity_name is True
+
+
+def test_v1_6_1_attr_name_is_just_sensor_suffix() -> None:
+    """v1.6.1 strips the device-name prefix from `_attr_name`. HA combines
+    `device.name` + `_attr_name` for display, so `_attr_name` should be
+    just the per-sensor suffix (e.g. 'Gas Monthly Usage'), not
+    'Mercury NZ Gas Monthly Usage'."""
+    sensor = _make_sensor("gas_monthly_usage")
+    assert sensor._attr_name == "Gas Monthly Usage"
+    assert "Mercury NZ" not in sensor._attr_name
+
+    elec = _make_sensor("energy_usage")
+    assert elec._attr_name == "Energy Usage"
+    assert "Mercury NZ" not in elec._attr_name
+
+
+def test_v1_6_1_device_name_no_longer_includes_email() -> None:
+    """v1.6.1 `device_info.name` is just the config-entry name (e.g.
+    'Mercury NZ') — the email is dropped so HA's entity_id slug doesn't
+    pull the email into every new entity. Multi-account users are still
+    distinguished by the `(DOMAIN, email)` identifier tuple."""
+    sensor = _make_sensor("gas_monthly_usage")
+    info = sensor.device_info
+    assert info["name"] == DEFAULT_NAME  # "Mercury NZ"
+    assert "test@example.com" not in info["name"]
+    assert "@" not in info["name"]
+    # Identifier tuple keeps email so the device is uniquely keyed.
+    assert info["identifiers"] == {("mercury_co_nz", "test@example.com")}
