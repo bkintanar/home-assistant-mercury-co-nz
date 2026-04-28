@@ -26,6 +26,53 @@ except ImportError as e:
             raise ImportError("pymercury library is required but not available")
 
 
+def _collapse_gas_pairs(entries: list[dict]) -> list[dict]:
+    """Collapse Mercury's parallel (estimate, actual) gas pair structure.
+
+    Mercury returns each gas billing period as TWO entries — one in the
+    'estimate' group and one in 'actual', with one zero and one non-zero
+    per pair. pymercury 1.1.2's `daily_usage` flattens both groups, so a
+    naive `dict[anchor] = ...` bucketize in the statistics importer lets
+    the second-written entry clobber the first, losing ~half the periods'
+    real values.
+
+    Pick the entry with the larger non-zero consumption for each
+    `(invoice_from, invoice_to)` window. Ties break to actual
+    (`is_estimated=False`) so a fully-zero pair still picks the actual
+    entry. Returned in chronological order on `(invoice_to, date)`.
+
+    pymercury 1.1.3+ exposes `ServiceUsage.consumption_periods` which
+    pre-collapses upstream; once the floor is bumped, prefer that and
+    drop this helper.
+    """
+    if not entries:
+        return []
+
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for entry in entries:
+        key = (
+            entry.get("invoice_from") or "",
+            entry.get("invoice_to") or entry.get("date") or "",
+        )
+        grouped.setdefault(key, []).append(entry)
+
+    def _rank(e: dict) -> tuple[float, int]:
+        # Sort largest-non-zero first; on equal values, actual wins
+        # (is_estimated=False → 0 < 1 → sorts before estimate).
+        consumption = e.get("consumption") or 0
+        return (-float(consumption), 1 if e.get("is_estimated") else 0)
+
+    collapsed: list[dict] = []
+    for group in grouped.values():
+        if len(group) == 1:
+            collapsed.append(group[0])
+            continue
+        collapsed.append(sorted(group, key=_rank)[0])
+
+    collapsed.sort(key=lambda d: (d.get("invoice_to") or d.get("date") or ""))
+    return collapsed
+
+
 class MercuryAPI:
     """Mercury Energy API client wrapper."""
 
@@ -979,7 +1026,19 @@ class MercuryAPI:
             # Each entry in gas_monthly.daily_usage represents an INVOICE PERIOD
             # (typically one month) — name is misleading because pymercury reuses
             # ServiceUsage's daily_usage list regardless of the request interval.
-            monthly_history = list(getattr(gas_monthly, "daily_usage", []) or [])
+            #
+            # Mercury returns gas as parallel (estimate, actual) pairs — one
+            # entry per group per period, with one zero per pair. pymercury
+            # 1.1.3+ exposes consumption_periods (pre-collapsed); 1.1.2 only
+            # has the flat 20-entry daily_usage. Collapse locally when the
+            # newer property is unavailable so the importer never sees the
+            # zero-pair partner overwriting a real estimate.
+            consumption_periods = getattr(gas_monthly, "consumption_periods", None)
+            if consumption_periods is not None:
+                monthly_history = list(consumption_periods)
+            else:
+                raw_history = list(getattr(gas_monthly, "daily_usage", []) or [])
+                monthly_history = _collapse_gas_pairs(raw_history)
 
             _LOGGER.info(
                 "Mercury gas: %d monthly entries, %.2f kWh total, $%.2f total",
