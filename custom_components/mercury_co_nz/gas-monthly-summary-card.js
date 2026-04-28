@@ -23,21 +23,8 @@ class MercuryGasMonthlySummaryCard extends LitElement {
         color: white;
       }
 
-      /* Single-row layout: "🔥 Your gas usage for this billing period   $X.XX | XXX kWh"
-         falls back to wrapped on narrow screens. */
-      .usage-details {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        gap: 16px;
-      }
-      .usage-date {
-        margin-bottom: 0;
-      }
-      .usage-stats {
-        font-weight: 600;
-      }
-
+      /* Description on line 1 (with 🔥 prefix), $X.XX | XXX kWh on line 2 —
+         restoring the v1.6.0 stacked layout per user feedback in v1.6.3. */
       .fire-emoji {
         margin-right: 6px;
         font-size: 16px;
@@ -553,7 +540,7 @@ if (window.customCards) {
 }
 
 console.info(
-  '%c MERCURY-GAS-MONTHLY-SUMMARY-CARD %c v1.6.2 ',
+  '%c MERCURY-GAS-MONTHLY-SUMMARY-CARD %c v1.6.3 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
