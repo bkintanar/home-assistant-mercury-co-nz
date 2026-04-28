@@ -34,6 +34,19 @@ name: Monthly Summary
 
 ![Energy Monthly Summary](assets/monthly-summary.png)
 
+### Gas Monthly Usage (v1.6.0+)
+
+```yaml
+type: custom:mercury-gas-monthly-summary-card
+entity: sensor.mercury_nz_gas_monthly_usage
+name: Gas Monthly Usage
+```
+
+A bar chart of monthly gas consumption with the same prev/next nav as the
+electricity card. **Yellow** bars are actual meter reads; **gray** bars are
+Mercury estimates. Click any bar to see that period's invoice range, cost,
+and kWh. Requires a Mercury account with gas service.
+
 ## ✨ Features
 
 ### 📊 Interactive Chart Card
@@ -98,7 +111,7 @@ If your Mercury account includes gas service (alongside electricity, or gas-only
 
 - **Energy Dashboard → Monthly tab**: gas bars at correct totals per month — matches your Mercury bill. ✅
 - **Energy Dashboard → Daily / Hourly tabs**: a single bar per Mercury invoice period at `invoice_to`. The daily/hourly views still work but show monthly granularity — this is an honest representation of what Mercury actually provides (no synthetic sub-monthly distribution).
-- **Live `sensor.mercury_nz_gas_*` entities**: not provided in v1.4.0 (would require sub-monthly data Mercury doesn't expose).
+- **Live `sensor.mercury_nz_gas_monthly_usage` entity** (v1.6.0+): exposes the per-period gas history (kWh, cost, invoice dates, `is_estimated` tag) as `extra_state_attributes` so the new `mercury-gas-monthly-summary-card` Lovelace card can render a bar chart with month-by-month nav. The entity itself reports the current rolling kWh total. Daily/hourly gas entities are still not available — Mercury simply doesn't expose sub-monthly data.
 
 **Setup:**
 
@@ -298,6 +311,34 @@ The monthly summary card displays:
 - **Days remaining** in the current billing period
 - **Progress bar** showing how much of the billing period has elapsed
 - **Projected bill amount** extracted from Mercury's billing notes
+
+### Gas Monthly Usage Card (v1.6.0+)
+
+```yaml
+type: custom:mercury-gas-monthly-summary-card
+entity: sensor.mercury_nz_gas_monthly_usage
+name: Gas Monthly Usage
+```
+
+#### Gas Card Configuration
+
+| Option            | Type    | Default             | Description                                  |
+| ----------------- | ------- | ------------------- | -------------------------------------------- |
+| `entity`          | string  | **Required**        | Must be `sensor.mercury_nz_gas_monthly_usage` |
+| `name`            | string  | "Gas Monthly Usage" | Card title                                   |
+| `show_navigation` | boolean | `true`              | Show previous/next page arrows               |
+
+The gas card displays:
+
+- **Bar chart** of monthly gas consumption (kWh) — one bar per Mercury invoice period
+- **Per-bar coloring**: yellow `rgb(255, 240, 0)` for actual meter reads, gray `#727272` for Mercury estimates
+- **Page navigation** with prev/next arrows when more than 6 periods of history are available
+- **Click-to-select**: click any bar to see that period's invoice range (e.g. `27 Feb 2026 – 27 Mar 2026`), cost, and kWh — with an `(estimated)` annotation when applicable
+- **Legend** showing both "Actual" and "Estimated" indicators
+
+> **Requirements**: Mercury account with gas service AND `mercury-co-nz-api>=1.1.3` (auto-installed via `manifest.json`). The `is_estimated` flag on each period drives the color choice — comes from pymercury's `consumption_periods` collapse of Mercury's parallel estimate/actual pair structure.
+
+> **Note**: After upgrading to v1.6.0 from an older version, perform a **full Home Assistant restart** (Settings → System → Restart) — not just a config-entry reload — so the new sensor entity and JS card load from disk. HACS-installed Python modules are not hot-swapped on file update.
 
 ## 🛠️ Development
 
