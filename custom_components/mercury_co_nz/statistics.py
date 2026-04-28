@@ -35,7 +35,6 @@ from .const import (
     STATISTICS_FAILURE_NOTIFICATION_THRESHOLD,
     STATISTICS_GAS_CONSUMPTION_SUFFIX,
     STATISTICS_GAS_COST_SUFFIX,
-    STATISTICS_REIMPORT_DAYS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -420,11 +419,14 @@ class MercuryStatisticsImporter:
                 buckets.setdefault(slot, (hourly_kwh, hourly_cost))
                 slot += timedelta(hours=1)
 
-        # 4. Emit chronologically with cumulative sums; skip slots before cutoff.
+        # 4. Emit chronologically with cumulative sums; skip slots at or
+        #    before cutoff (the recorder's cumulative `sum` baseline already
+        #    accounts for them — re-adding their kwh inflates the most-recent
+        #    slot's sum on every coordinator cycle).
         energy_stats: list[StatisticData] = []
         cost_stats: list[StatisticData] = []
         for slot in sorted(buckets.keys()):
-            if slot.timestamp() < cutoff_ts:
+            if slot.timestamp() <= cutoff_ts:
                 continue
             kwh, cost_value = buckets[slot]
             energy_sum_start += kwh
@@ -549,9 +551,14 @@ class MercuryStatisticsImporter:
                 cost_meta["statistic_id"]
             )
 
-            cutoff_ts: float = (
-                last_ts_energy or 0.0
-            ) - STATISTICS_REIMPORT_DAYS * 86400
+            # Cutoff is the timestamp of the last entry already in the recorder.
+            # `_build_*_entries` filters out anchors at or before this so we
+            # never re-emit entries whose contribution is already in
+            # `last_sum_energy`. Without this guard, each coordinator cycle
+            # would re-add the most-recent entry's kwh on top of a baseline
+            # that already includes it, inflating its `sum` by N×kwh after N
+            # cycles (the cause of the v1.5.1 gas "164,220 kWh" bar).
+            cutoff_ts: float = last_ts_energy or 0.0
 
             if self._fuel_type == "gas":
                 energy_stats, cost_stats, null_skip_count = self._build_monthly_entries(
