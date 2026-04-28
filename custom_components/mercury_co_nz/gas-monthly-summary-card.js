@@ -12,12 +12,36 @@ class MercuryGasMonthlySummaryCard extends LitElement {
   static styles = [
     mercuryChartStyles,
     css`
-      /* Gas card-specific overrides — .legend-circle.estimated lives
-         in chartLegendStyles for cross-card reuse. */
-      .estimate-tag {
-        margin-left: 6px;
-        opacity: 0.75;
-        font-style: italic;
+      /* Gas card-specific overrides. The chart-info background reflects the
+         selected period's read type — yellow for actual reads, gray for
+         Mercury estimates — matching the bar color. */
+      .chart-info.estimate {
+        background: #727272;
+      }
+      .chart-info.estimate .usage-date,
+      .chart-info.estimate .usage-stats {
+        color: white;
+      }
+
+      /* Single-row layout: "🔥 Your gas usage for this billing period   $X.XX | XXX kWh"
+         falls back to wrapped on narrow screens. */
+      .usage-details {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 16px;
+      }
+      .usage-date {
+        margin-bottom: 0;
+      }
+      .usage-stats {
+        font-weight: 600;
+      }
+
+      .fire-emoji {
+        margin-right: 6px;
+        font-size: 16px;
+        line-height: 1;
       }
     `
   ];
@@ -447,13 +471,12 @@ class MercuryGasMonthlySummaryCard extends LitElement {
 
           ${this._renderCustomLegend()}
 
-          <div class="chart-info">
+          <div class="chart-info ${this._selectedDate?.is_estimated ? 'estimate' : ''}">
             <div class="data-info">
               ${this._selectedDate ? html`
                 <div class="usage-details">
                   <div class="usage-date">
-                    Your gas usage for this billing period
-                    ${this._selectedDate.is_estimated ? html`<span class="estimate-tag">(estimated)</span>` : ''}
+                    <span class="fire-emoji">🔥</span>Your gas usage for this billing period
                   </div>
                   <div class="usage-stats">$${this._selectedDate.cost.toFixed(2)} | ${this._selectedDate.consumption.toFixed(2)} kWh</div>
                 </div>
@@ -495,6 +518,10 @@ class MercuryGasMonthlySummaryCard extends LitElement {
   }
 
   _renderCustomLegend() {
+    // Inline `style` on the second swatch so cascade order can't lose. The
+    // shared `.legend-circle` rule in styles.js sets yellow as the default,
+    // and inline-style (specificity 1,0,0,0) beats anything in the cascade.
+    // Label "Estimate" matches the Mercury app's terminology.
     return html`
       <div class="custom-legend">
         <div class="legend-item">
@@ -502,8 +529,8 @@ class MercuryGasMonthlySummaryCard extends LitElement {
           <span class="legend-label">Actual</span>
         </div>
         <div class="legend-item">
-          <div class="legend-circle estimated"></div>
-          <span class="legend-label">Estimated</span>
+          <div class="legend-circle" style="background-color: #727272;"></div>
+          <span class="legend-label">Estimate</span>
         </div>
       </div>
     `;
@@ -526,7 +553,7 @@ if (window.customCards) {
 }
 
 console.info(
-  '%c MERCURY-GAS-MONTHLY-SUMMARY-CARD %c v1.6.0 ',
+  '%c MERCURY-GAS-MONTHLY-SUMMARY-CARD %c v1.6.2 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
