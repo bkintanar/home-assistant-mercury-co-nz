@@ -26,6 +26,7 @@ ALLOWED_JS_FILES = frozenset({
     "energy-usage-card.js",
     "energy-weekly-summary-card.js",
     "energy-monthly-summary-card.js",
+    "gas-monthly-summary-card.js",
 })
 
 

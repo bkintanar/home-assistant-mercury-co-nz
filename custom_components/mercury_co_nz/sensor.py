@@ -398,7 +398,23 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
                 attributes["monthly_usage_history"] = monthly_history
                 attributes["monthly_data_points"] = len(monthly_history)
 
-
+        # Gas chart history — sibling to (not inside) the electricity
+        # CHART_DATA_SENSORS block so the gas sensor doesn't inherit
+        # electricity history attributes that would push it toward the 14KB
+        # cap (Issue #4). Each entry in gas_monthly_usage_history carries
+        # `is_estimated`/`read_type` tags from pymercury's consumption_periods
+        # (1.1.3+) which gas-monthly-summary-card.js uses to color bars
+        # (yellow=actual, gray=estimated).
+        if self._sensor_type == "gas_monthly_usage":
+            gas_history = self.coordinator.data.get("gas_monthly_usage_history") or []
+            attributes["gas_monthly_usage_history"] = gas_history
+            attributes["gas_monthly_data_points"] = len(gas_history)
+            attributes["gas_monthly_total_usage"] = (
+                self.coordinator.data.get("gas_monthly_usage") or 0
+            )
+            attributes["gas_monthly_total_cost"] = (
+                self.coordinator.data.get("gas_monthly_cost") or 0
+            )
 
         # Add bill statement details for all sensors (if available)
         if "bill_statement_details" in self.coordinator.data:

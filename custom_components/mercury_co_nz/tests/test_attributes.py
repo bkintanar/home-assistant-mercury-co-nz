@@ -203,3 +203,125 @@ def test_truncation_keeps_most_recent_entries() -> None:
     assert daily[-1]["date"] == expected_last, (
         f"last kept entry should be {expected_last}, got {daily[-1]['date']}"
     )
+
+
+# ----------------------------------------------------------------------------
+# v1.6.0 — gas chart attribute exposure (gas-monthly-summary-card.js)
+# ----------------------------------------------------------------------------
+
+
+def _coordinator_with_gas_data():
+    """Build a coordinator stub holding only gas-side data, mirroring what
+    coordinator.py:169-176 produces after `gas_` prefixing."""
+    coord = MagicMock()
+    coord.data = {
+        "gas_monthly_usage_history": [
+            {
+                "date": "2026-02-26",
+                "consumption": 397.0,
+                "cost": 139.20,
+                "free_power": False,
+                "invoice_from": "2026-01-31",
+                "invoice_to": "2026-02-26",
+                "is_estimated": True,
+                "read_type": "estimate",
+            },
+            {
+                "date": "2026-03-27",
+                "consumption": 460.0,
+                "cost": 156.28,
+                "free_power": False,
+                "invoice_from": "2026-02-27",
+                "invoice_to": "2026-03-27",
+                "is_estimated": False,
+                "read_type": "actual",
+            },
+        ],
+        "gas_monthly_usage": 4842.0,
+        "gas_monthly_cost": 1499.42,
+        # Electricity data NOT present — the gas card must not depend on it.
+    }
+    coord.last_update_success = True
+    return coord
+
+
+def test_gas_monthly_usage_sensor_exposes_chart_history() -> None:
+    """The gas_monthly_usage sensor must expose gas_monthly_usage_history as
+    an extra_state_attribute so gas-monthly-summary-card.js can read it via
+    hass.states[entity_id].attributes.gas_monthly_usage_history.
+    """
+    coord = _coordinator_with_gas_data()
+    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com")
+
+    attrs = sensor.extra_state_attributes
+    assert attrs["gas_monthly_usage_history"] == coord.data["gas_monthly_usage_history"]
+    assert attrs["gas_monthly_data_points"] == 2
+    assert attrs["gas_monthly_total_usage"] == 4842.0
+    assert attrs["gas_monthly_total_cost"] == 1499.42
+
+    # LOAD-BEARING for per-bar coloring — the card maps is_estimated → color.
+    assert attrs["gas_monthly_usage_history"][0]["is_estimated"] is True
+    assert attrs["gas_monthly_usage_history"][1]["is_estimated"] is False
+
+
+def test_gas_monthly_usage_native_value_reads_total() -> None:
+    """The sensor's native_value must be the kWh scalar, not the history list."""
+    coord = _coordinator_with_gas_data()
+    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com")
+    assert sensor.native_value == 4842.0
+
+
+def test_electricity_sensors_do_not_get_gas_attributes() -> None:
+    """Issue #4 isolation: gas attributes must NOT bleed onto electricity
+    chart sensors — they're already near the 14KB attribute-size budget."""
+    coord = _coordinator_with_synthetic_data()
+    coord.data["gas_monthly_usage_history"] = [
+        {
+            "date": "2026-03-27", "consumption": 460.0, "cost": 156.28,
+            "invoice_from": "2026-02-27", "invoice_to": "2026-03-27",
+            "is_estimated": False, "read_type": "actual", "free_power": False,
+        }
+    ]
+    coord.data["gas_monthly_usage"] = 460.0
+    coord.data["gas_monthly_cost"] = 156.28
+
+    sensor = MercurySensor(coord, "energy_usage", DEFAULT_NAME, "test@example.com")
+    attrs = sensor.extra_state_attributes
+
+    assert "gas_monthly_usage_history" not in attrs
+    assert "gas_monthly_data_points" not in attrs
+    assert "gas_monthly_total_usage" not in attrs
+    assert "gas_monthly_total_cost" not in attrs
+
+
+def test_gas_sensor_stays_under_safety_budget() -> None:
+    """Gas history is ~10 entries × ~250 bytes ≈ 2.5KB. Verify the gas chart
+    sensor's attributes are well under the 14KB safety budget even with a
+    full year of data."""
+    base_date = date(2026, 1, 1)
+    coord = MagicMock()
+    coord.data = {
+        "gas_monthly_usage_history": [
+            {
+                "date": (base_date + timedelta(days=30 * i)).isoformat(),
+                "consumption": 400.0 + i * 50,
+                "cost": 130.50 + i * 15,
+                "free_power": False,
+                "invoice_from": (base_date + timedelta(days=30 * i - 28)).isoformat(),
+                "invoice_to": (base_date + timedelta(days=30 * i)).isoformat(),
+                "is_estimated": (i % 2 == 0),
+                "read_type": "estimate" if (i % 2 == 0) else "actual",
+            }
+            for i in range(12)
+        ],
+        "gas_monthly_usage": 5400.0,
+        "gas_monthly_cost": 1700.0,
+    }
+    coord.last_update_success = True
+
+    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com")
+    serialized = json.dumps(sensor.extra_state_attributes)
+    assert len(serialized) < SAFETY_BUDGET, (
+        f"gas_monthly_usage attributes are {len(serialized)} bytes; "
+        f"safety budget is {SAFETY_BUDGET}"
+    )

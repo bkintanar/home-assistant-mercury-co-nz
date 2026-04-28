@@ -19,6 +19,7 @@ JSMODULES: Final[list[dict[str, str]]] = [
     {"name": "Mercury Energy Usage Card", "filename": "energy-usage-card.js", "version": INTEGRATION_VERSION},
     {"name": "Mercury Energy Weekly Summary Card", "filename": "energy-weekly-summary-card.js", "version": INTEGRATION_VERSION},
     {"name": "Mercury Energy Monthly Summary Card", "filename": "energy-monthly-summary-card.js", "version": INTEGRATION_VERSION},
+    {"name": "Mercury Gas Monthly Summary Card", "filename": "gas-monthly-summary-card.js", "version": INTEGRATION_VERSION},
 ]
 
 # Configuration keys
@@ -169,6 +170,16 @@ SENSOR_TYPES = {
         "unit": "$",
         "icon": "mdi:fire",
         "device_class": "monetary",
+        "state_class": "total",
+    },
+    "gas_monthly_usage": {
+        "name": "Gas Monthly Usage",
+        "unit": "kWh",
+        "icon": "mdi:fire",
+        "device_class": "energy",
+        # Same windowed-sum reasoning as electricity total_usage — Mercury
+        # reports a rolling year-to-date gas total that can roll forward,
+        # so total_increasing would corrupt long-term-stat accumulators.
         "state_class": "total",
     },
     "bill_broadband_amount": {
