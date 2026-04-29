@@ -9,7 +9,26 @@ class MercuryEnergyUsageCard extends LitElement {
   static styles = [
     mercuryChartStyles,
     css`
-      /* Energy chart specific overrides */
+      /* Two-line layout with ⚡ emoji as a left column:
+           ⚡ Your usage on Tuesday 27 March 2026
+              $4.27 | 13.43 kWh
+         Both text lines start at the same x-offset; the emoji sits to
+         the left, vertically aligned to the top so it tracks the first
+         line. Matches the gas card's 🔥-prefix layout (v1.6.4). */
+      .usage-details {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      .lightning-emoji {
+        font-size: 16px;
+        line-height: 1.2;
+        flex-shrink: 0;
+      }
+      .usage-text {
+        flex: 1;
+        min-width: 0;
+      }
     `
   ];
 
@@ -1277,8 +1296,11 @@ class MercuryEnergyUsageCard extends LitElement {
             <div class="data-info">
               ${this._selectedDate ? html`
                 <div class="usage-details">
-                  <div class="usage-date">${this._currentPeriod === 'monthly' ? 'Your usage this billing period' : `Your usage on ${this._selectedDate.dateFormatted}`}</div>
-                  <div class="usage-stats">$${this._selectedDate.cost.toFixed(2)} | ${this._selectedDate.consumption.toFixed(2)} kWh</div>
+                  <span class="lightning-emoji">⚡</span>
+                  <div class="usage-text">
+                    <div class="usage-date">${this._currentPeriod === 'monthly' ? 'Your usage this billing period' : `Your usage on ${this._selectedDate.dateFormatted}`}</div>
+                    <div class="usage-stats">$${this._selectedDate.cost.toFixed(2)} | ${this._selectedDate.consumption.toFixed(2)} kWh</div>
+                  </div>
                 </div>
               ` : html`Loading...`}
             </div>
@@ -1387,7 +1409,7 @@ window.customCards = window.customCards || [];
 }
 
 console.info(
-  '%c MERCURY-ENERGY-USAGE-CARD %c v1.0.0 ',
+  '%c MERCURY-ENERGY-USAGE-CARD %c v1.6.5 ',
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray'
 );
