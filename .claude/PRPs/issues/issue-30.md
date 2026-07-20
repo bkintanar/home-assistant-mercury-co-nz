@@ -10,7 +10,7 @@
 | ---------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Priority   | MEDIUM | Real, specifically-requested use case (@LanlinkNZ runs one HA instance per address on a single multi-ICP account) but niche and non-blocking.        |
 | Complexity | MEDIUM | ~4 files (const, config_flow, coordinator, __init__) + tests; builds directly on the v2.0.0 per-`{service_id}` data layer, so low architectural risk. |
-| Confidence | HIGH   | The whole thing cascades from one function: filtering `_discovered_electricity_services` + `_primary_service_id` in `_discover_icps_if_needed` scopes entities (`sensor.py:69`), account-scoped summaries (top-level keys), and charts to the chosen ICP. |
+| Confidence | 9.8/10 | Single cascade point (`_discover_icps_if_needed` → `sensor.py:69` + top-level keys) verified in code; the HA-API specifics that usually cause one-pass misses are all pinned down: non-deprecated OptionsFlow pattern for `min_ha_version` 2025.11, the exact `strings.json` `options` block (confirmed it's the only localization file — no `translations/en.json`), reload→fresh-coordinator verified in `__init__.py`, and the `_primary_service_id` persist-on-clear nuance made deterministic. Residual 0.2 = live multi-ICP account behavior (Mercury service ordering / whether a "Total" pseudo-service appears) can only be fully confirmed on @LanlinkNZ's account. |
 
 ---
 
@@ -72,6 +72,7 @@ Account-scoped summary sensors read top-level (primary) keys — `coordinator.py
 | --- | --- | --- | --- |
 | `custom_components/mercury_co_nz/const.py` | ~27 | UPDATE | Add `CONF_ICP = "icp"` config key |
 | `custom_components/mercury_co_nz/config_flow.py` | 27-34, +new | UPDATE | Add `async_get_options_flow` + `MercuryOptionsFlow` (ICP selector from discovered services) |
+| `custom_components/mercury_co_nz/strings.json` | +`options` block | UPDATE | Add `options.step.init` labels + `options.abort.icps_not_discovered` (only localization file — no `translations/en.json`) |
 | `custom_components/mercury_co_nz/coordinator.py` | 287-344 | UPDATE | In `_discover_icps_if_needed`, honor `entry.options[CONF_ICP]`: filter `_discovered_electricity_services` to the selected ICP and set it primary |
 | `custom_components/mercury_co_nz/__init__.py` | 63-104 | UPDATE | Add options-update listener → reload entry on option change |
 | `custom_components/mercury_co_nz/tests/test_multi_icp.py` | append | UPDATE | Tests: option filters to one ICP; account-scoped sensors read selected slice; unset = current behavior |
@@ -104,7 +105,7 @@ CONF_ICP = "icp"  # options: pin a single electricity ICP (service_id) for this 
 
 **File**: `custom_components/mercury_co_nz/config_flow.py`  •  **Action**: UPDATE
 
-Add the import and an options-flow accessor on `MercuryConfigFlow`, plus the handler class:
+Add the import and an options-flow accessor on `MercuryConfigFlow`, plus the handler class. **Use the non-deprecated pattern for `min_ha_version` 2025.11**: do NOT assign `self.config_entry` in `__init__` (deprecated since HA 2024.11 — the base class provides `self.config_entry` automatically), and `async_get_options_flow` takes no stored arg.
 ```python
 from homeassistant.core import callback
 from .const import DOMAIN, CONF_EMAIL, CONF_ICP
@@ -113,15 +114,16 @@ class MercuryConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ...
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
-        return MercuryOptionsFlow(config_entry)
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+        return MercuryOptionsFlow()
 
 
 class MercuryOptionsFlow(config_entries.OptionsFlow):
-    """Options: pin a single ICP for this HA instance."""
+    """Options: pin a single ICP for this HA instance.
 
-    def __init__(self, config_entry) -> None:
-        self.config_entry = config_entry
+    No __init__ — `self.config_entry` is provided by the base class
+    (assigning it manually is deprecated in HA 2024.11+).
+    """
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
@@ -132,15 +134,15 @@ class MercuryOptionsFlow(config_entries.OptionsFlow):
         # Populate choices from the live coordinator's discovered ICPs.
         coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
         services = getattr(coordinator, "_discovered_electricity_services", []) or []
-        options = {s.service_id: f"ICP {s.service_id}" for s in services}
+        icp_choices = {s.service_id: f"ICP {s.service_id}" for s in services}
 
-        if not options:
+        if not icp_choices:
             # Discovery hasn't completed yet — can't list ICPs.
             return self.async_abort(reason="icps_not_discovered")
 
         current = self.config_entry.options.get(CONF_ICP)
         # "" sentinel = All ICPs (default multi-ICP behavior)
-        choices = {"": "All ICPs (default)", **options}
+        choices = {"": "All ICPs (default)", **icp_choices}
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
@@ -148,7 +150,28 @@ class MercuryOptionsFlow(config_entries.OptionsFlow):
             }),
         )
 ```
-**Why**: standard HA OptionsFlow; choices come from live discovery so the user picks a real ICP; `""` clears back to default.
+**Why**: standard HA OptionsFlow; choices come from live discovery so the user picks a real ICP; `""` clears back to default. The no-`__init__` form avoids the HA 2024.11+ `config_entry` deprecation (relevant since `min_ha_version` is 2025.11.0).
+
+### Step 2b: Localization (required for the options form to render)
+
+**File**: `custom_components/mercury_co_nz/strings.json`  •  **Action**: UPDATE (add a top-level `options` sibling to the existing `config` block; this is the ONLY localization file — no `translations/en.json` exists)
+```json
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mercury ICP selection",
+        "description": "Pin a single ICP (meter) for this Home Assistant instance. When set, all sensors, monthly/weekly summaries, and usage charts show only that ICP. Choose \"All ICPs\" to keep the default multi-ICP behavior. Note: the account bill/amount-due remains account-wide (Mercury issues one bill per account).",
+        "data": {
+          "icp": "ICP for this instance"
+        }
+      }
+    },
+    "abort": {
+      "icps_not_discovered": "ICPs have not been discovered yet. Wait for the integration to poll once (about 1 coordinator cycle after setup), then reopen Configure."
+    }
+  }
+```
+**Why**: without the `options` block the form field/abort render as raw keys. `config` stays untouched.
 
 ### Step 3: Honor the option in discovery
 
@@ -180,9 +203,20 @@ if selected_icp:
             [s.service_id for s in self._discovered_electricity_services],
         )
 ```
-Then guard the existing primary default so the option wins — the block at 318-322 already uses `self._primary_service_id or services[0]`, so setting `_primary_service_id = selected_icp` above makes it stick. Add `from .const import ..., CONF_ICP` to the imports.
+Add `from .const import ..., CONF_ICP` to the coordinator imports.
 
-**Why**: single cascade point — filtering the list + fixing primary is all that's needed; importer loop (337-344) and `sensor.py:69` naturally follow the filtered list.
+**Primary-on-clear (deterministic — avoids a stale pin sticking):** the existing block at `coordinator.py:318-322` computes `self._primary_service_id = self._primary_service_id or self._discovered_electricity_services[0].service_id`, and `self._primary_service_id` is seeded in `__init__` from the *persisted* `config.get("_primary_service_id")` (coordinator.py:58). Setting it to `selected_icp` above makes the pin win. But when the option is **cleared**, a previously-pinned value can still be persisted in `entry.data["_primary_service_id"]` and would incorrectly remain primary. Make the unset path deterministic by validating the persisted primary against the (now-unfiltered) discovered list:
+```python
+else:
+    # option unset/cleared → don't let a stale pinned primary linger:
+    # keep persisted primary only if it's still a discovered ICP, else services[0].
+    ids = [s.service_id for s in self._discovered_electricity_services]
+    if self._primary_service_id not in ids:
+        self._primary_service_id = None  # fall through to the `or services[0]` default below
+```
+Place this in the `else` branch of the `if selected_icp:` block from the snippet above (i.e. when no valid pin). The existing 318-331 block then sets/persists the correct primary. (Existing single-ICP users are unaffected: services[0] == their only ICP == persisted primary.)
+
+**Why**: single cascade point — filtering the list + fixing primary is all that's needed; importer loop (337-344) and `sensor.py:69` naturally follow the filtered list. The persist-on-clear guard keeps toggling the option fully reversible.
 
 ### Step 4: Reload when the option changes
 
@@ -216,6 +250,11 @@ async def test_pinned_icp_absent_falls_back_to_all(...):
 
 async def test_no_pinned_icp_is_unchanged_v200_behavior(...):
     # options empty → all ICPs discovered, primary == services[0]
+
+async def test_clearing_pin_reverts_primary_to_services0(...):
+    # entry.data["_primary_service_id"] = "<secondary>" (stale pin persisted),
+    # options CONF_ICP empty → discovery reverts _primary_service_id to services[0]
+    # (persist-on-clear guard), all ICPs discovered.
 ```
 
 ### Step 6: Version bump
