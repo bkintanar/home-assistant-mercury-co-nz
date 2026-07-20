@@ -8,14 +8,15 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, CONF_EMAIL, STATISTICS_HOURLY_RETENTION_DAYS
+from .const import DOMAIN, CONF_EMAIL, ICP_SCOPED_SENSOR_TYPES, STATISTICS_HOURLY_RETENTION_DAYS
 from .mercury_api import MercuryAPI
-from .statistics import MercuryStatisticsImporter
+from .statistics import MercuryStatisticsImporter, _sanitize_for_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,24 +27,35 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
         hass: HomeAssistant,
-        config: dict[str, Any],
+        config_entry: ConfigEntry,
         update_interval: timedelta,
     ) -> None:
-        """Initialize."""
+        """Initialize.
+
+        v2.0.0: takes the full config_entry (not just entry.data) so we can
+        persist the discovered _primary_service_id back via async_update_entry.
+        """
+        config = config_entry.data
+        self._config_entry = config_entry
         self.api = MercuryAPI(
             async_get_clientsession(hass),
             config[CONF_EMAIL],
             config[CONF_PASSWORD],
         )
         self._email = config[CONF_EMAIL]
-        self._statistics = MercuryStatisticsImporter(hass, config[CONF_EMAIL])
 
-        # Gas pipeline (v1.4.0) — lazily initialized on first cycle that detects a
-        # gas service in complete_data.services. Mercury's gas API only returns
-        # monthly aggregates, so the gas pipeline is much smaller than electricity:
-        # one fetch per cycle, no JSON cache, one StatisticData per invoice period.
-        self._gas_available: bool = False
-        self._gas_statistics: MercuryStatisticsImporter | None = None
+        # v2.0.0: per-(fuel, service_id) importer dict replaces v1.5.0's two
+        # named attrs (self._statistics + self._gas_statistics). First-cycle
+        # discovery instantiates one importer per (fuel, ICP) using v1.5.0's
+        # service_id/is_primary kwargs. Primary-ICP keeps legacy Store key
+        # (back-compat invariant — see statistics.py:80-90).
+        self._importers: dict[tuple[str, str], MercuryStatisticsImporter] = {}
+        self._discovered: bool = False
+        self._discovered_electricity_services: list = []
+        self._discovered_gas_services: list = []
+        # Persisted across HA restarts via config_entry.data; first-cycle
+        # discovery sets it from services[0] (deterministic) if not already present.
+        self._primary_service_id: str | None = config.get("_primary_service_id")
 
         super().__init__(
             hass,
@@ -94,84 +106,102 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             usage_content_data = await self.api.get_usage_content()
             _LOGGER.info("Mercury coordinator: Received usage content data")
 
-            # Gas pipeline (v1.4.0) — lazy detection on first cycle, then fetch every cycle.
-            if not self._gas_available:
-                try:
-                    loop = asyncio.get_event_loop()
-                    complete_data = await loop.run_in_executor(
-                        None, self.api._client.get_complete_account_data
-                    )
-                    if complete_data and any(s.is_gas for s in complete_data.services):
-                        self._gas_available = True
-                        _LOGGER.info(
-                            "Mercury CO NZ: gas service detected; enabling gas statistics importer"
-                        )
-                        self._gas_statistics = MercuryStatisticsImporter(
-                            self.hass, self._email, fuel_type="gas"
-                        )
-                except Exception as exc:  # pylint: disable=broad-except
-                    _LOGGER.debug(
-                        "Gas availability check failed (will retry next cycle): %s", exc
-                    )
+            # v2.0.0: ICP discovery — first-cycle scan of complete_data.services
+            # to enumerate ALL electricity + gas ICPs and instantiate one
+            # MercuryStatisticsImporter per (fuel, service_id) pair.
+            await self._discover_icps_if_needed()
 
-            gas_data: dict[str, Any] | None = None
-            if self._gas_available:
-                try:
-                    gas_data = await self.api.get_gas_usage_data()
-                except Exception as exc:  # pylint: disable=broad-except
-                    _LOGGER.warning("Mercury gas usage fetch failed this cycle: %s", exc)
-                    gas_data = None
-
+            # Plans + gas now also return per-service dicts. Bill data stays
+            # account-scoped (one bill aggregates all ICPs).
             _LOGGER.info("📋 Fetching electricity plans data...")
-            plans_data = await self.api.get_electricity_plans()
-            _LOGGER.info("Mercury coordinator: Received plans data")
-            if plans_data:
-                _LOGGER.info("✅ Plans data contains %d keys: %s", len(plans_data), list(plans_data.keys()))
+            plans_data_per_icp = await self.api.get_electricity_plans()
+            if plans_data_per_icp:
+                _LOGGER.info(
+                    "✅ Plans data: %d ICP(s)",
+                    len(plans_data_per_icp),
+                )
             else:
                 _LOGGER.warning("⚠️ No plans data received")
 
-            # Combine all datasets
-            combined_data = usage_data.copy() if usage_data else {}
+            gas_data_per_icp: dict[str, dict[str, Any]] = {}
+            if self._discovered_gas_services:
+                try:
+                    gas_data_per_icp = await self.api.get_gas_usage_data()
+                except Exception as exc:  # pylint: disable=broad-except
+                    _LOGGER.warning("Mercury gas usage fetch failed this cycle: %s", exc)
+                    gas_data_per_icp = {}
+
+            # v2.0.0: per-ICP merge with primary back-compat dual-write.
+            # For PRIMARY ICP, write top-level keys (back-compat for primary-ICP
+            # sensors using legacy lookup like `coordinator.data['total_usage']`).
+            # For ALL ICPs (incl. primary), also write ICP-prefixed keys
+            # `icp_<token>_<key>` for non-primary sensor lookups.
+            combined_data: dict[str, Any] = {}
+
+            # Electricity per-ICP (usage_data is now {service_id: per_service_dict})
+            for sid, per_data in (usage_data or {}).items():
+                is_primary = sid == self._primary_service_id
+                icp_token = _sanitize_for_key(sid)
+                if is_primary:
+                    combined_data.update(per_data)
+                for k, v in per_data.items():
+                    combined_data[f"icp_{icp_token}_{k}"] = v
+
+            # Account-scoped: bill data unchanged (one bill per account)
             if bill_data:
-                # Add bill data with prefix to avoid naming conflicts
                 for key, value in bill_data.items():
                     combined_data[f"bill_{key}"] = value
 
-            if monthly_summary_data:
-                # Add monthly summary data with prefix to avoid naming conflicts
-                for key, value in monthly_summary_data.items():
-                    combined_data[f"monthly_{key}"] = value
+            # monthly_summary_data and weekly_summary_data are now per-ICP too
+            for sid, per_data in (monthly_summary_data or {}).items():
+                is_primary = sid == self._primary_service_id
+                icp_token = _sanitize_for_key(sid)
+                if is_primary:
+                    for k, v in per_data.items():
+                        combined_data[f"monthly_{k}"] = v
+                for k, v in per_data.items():
+                    combined_data[f"icp_{icp_token}_monthly_{k}"] = v
 
-            if weekly_summary_data:
-                # Add weekly summary data with prefix to avoid naming conflicts
-                for key, value in weekly_summary_data.items():
-                    combined_data[f"weekly_{key}"] = value
+            for sid, per_data in (weekly_summary_data or {}).items():
+                is_primary = sid == self._primary_service_id
+                icp_token = _sanitize_for_key(sid)
+                if is_primary:
+                    for k, v in per_data.items():
+                        combined_data[f"weekly_{k}"] = v
+                for k, v in per_data.items():
+                    combined_data[f"icp_{icp_token}_weekly_{k}"] = v
 
             if usage_content_data:
-                # Add usage content data with prefix to avoid naming conflicts
                 for key, value in usage_content_data.items():
                     combined_data[f"content_{key}"] = value
 
-            if plans_data:
-                # Add electricity plan data with prefix (issue #6)
-                for key, value in plans_data.items():
-                    combined_data[f"plan_{key}"] = value
+            # plans_data_per_icp is {service_id: per_service_dict}
+            for sid, per_data in plans_data_per_icp.items():
+                is_primary = sid == self._primary_service_id
+                icp_token = _sanitize_for_key(sid)
+                if is_primary:
+                    for k, v in per_data.items():
+                        combined_data[f"plan_{k}"] = v
+                for k, v in per_data.items():
+                    combined_data[f"icp_{icp_token}_plan_{k}"] = v
+            if plans_data_per_icp:
                 _LOGGER.info(
-                    "Mercury CO NZ: plan_* keys merged into coordinator data: %s",
+                    "Mercury CO NZ: plan_* keys merged: %s",
                     sorted(k for k in combined_data if k.startswith("plan_")),
                 )
-            else:
-                _LOGGER.warning(
-                    "Mercury CO NZ: get_electricity_plans returned empty/falsy data; "
-                    "all plan_* sensors will report None this cycle"
-                )
 
-            if gas_data:
-                # Add gas data with prefix to avoid collision with electricity keys.
-                for key, value in gas_data.items():
-                    combined_data[f"gas_{key}"] = value
+            # Gas per-ICP — first gas service is gas-primary
+            for i, (sid, per_data) in enumerate(gas_data_per_icp.items()):
+                icp_token = _sanitize_for_key(sid)
+                is_primary_gas = (i == 0)
+                if is_primary_gas:
+                    for k, v in per_data.items():
+                        combined_data[f"gas_{k}"] = v
+                for k, v in per_data.items():
+                    combined_data[f"icp_{icp_token}_gas_{k}"] = v
+            if gas_data_per_icp:
                 _LOGGER.info(
-                    "Mercury CO NZ: gas_* keys merged into coordinator data: %s",
+                    "Mercury CO NZ: gas_* keys merged: %s",
                     sorted(k for k in combined_data if k.startswith("gas_")),
                 )
 
@@ -231,29 +261,153 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
             #   (2) tracebacks DO reach HA logs via exc_info=True so bugs are findable.
             # The importer's own try/except only catches recorder-not-ready (KeyError /
             # RuntimeError from get_instance); logic errors propagate to THIS catch.
-            try:
-                await self._statistics.async_update(combined_data)
-            except Exception as exc:  # pylint: disable=broad-except
-                _LOGGER.error(
-                    "Mercury statistics import failed (Energy Dashboard data will be stale): %s",
-                    exc,
-                    exc_info=True,
-                )
-
-            if self._gas_statistics is not None:
+            # v2.0.0: iterate self._importers and feed each one a per-(fuel, ICP)
+            # data slice. Each importer reads its own primary-vs-secondary keys
+            # (top-level for primary back-compat; ICP-prefixed for non-primary).
+            for (fuel_type, service_id), importer in self._importers.items():
                 try:
-                    await self._gas_statistics.async_update(combined_data)
+                    per_importer_data = self._build_importer_data_slice(
+                        combined_data,
+                        fuel_type=fuel_type,
+                        service_id=service_id,
+                        is_primary=importer._is_primary,
+                    )
+                    await importer.async_update(per_importer_data)
                 except Exception as exc:  # pylint: disable=broad-except
                     _LOGGER.error(
-                        "Mercury gas statistics import failed (Energy Dashboard gas section will be stale): %s",
-                        exc,
-                        exc_info=True,
+                        "Mercury statistics import failed for (%s, %s) — Energy Dashboard will be stale: %s",
+                        fuel_type, service_id, exc, exc_info=True,
                     )
 
             return combined_data
         except Exception as exception:
             _LOGGER.error("Mercury coordinator: Error communicating with API: %s", exception)
             raise UpdateFailed(f"Error communicating with API: {exception}") from exception
+
+    async def _discover_icps_if_needed(self) -> None:
+        """First-cycle ICP discovery (v2.0.0).
+
+        Scans complete_data.services to enumerate all electricity + gas ICPs.
+        Designates the first electricity service as primary (deterministic;
+        persisted to config_entry.data so it survives HA restarts). Instantiates
+        one MercuryStatisticsImporter per (fuel, service_id) using v1.5.0's
+        service_id/is_primary kwargs. Primary-ICP keeps the legacy Store key
+        for back-compat (no orphaned id_prefix lock for existing users).
+        """
+        if self._discovered:
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            complete_data = await loop.run_in_executor(
+                None, self.api._client.get_complete_account_data
+            )
+            if not complete_data or not complete_data.services:
+                _LOGGER.warning(
+                    "Mercury CO NZ: complete_data empty on first cycle; will retry"
+                )
+                return
+
+            self._discovered_electricity_services = [
+                s for s in complete_data.services if s.is_electricity
+            ]
+            self._discovered_gas_services = [
+                s for s in complete_data.services if s.is_gas
+            ]
+
+            # Designate primary electricity ICP (deterministic: services[0])
+            if self._discovered_electricity_services:
+                self._primary_service_id = (
+                    self._primary_service_id
+                    or self._discovered_electricity_services[0].service_id
+                )
+                # Persist to config_entry.data so it survives HA restarts
+                if self._primary_service_id != self._config_entry.data.get("_primary_service_id"):
+                    self.hass.config_entries.async_update_entry(
+                        self._config_entry,
+                        data={
+                            **self._config_entry.data,
+                            "_primary_service_id": self._primary_service_id,
+                        },
+                    )
+
+            # Instantiate one importer per (fuel, ICP) pair.
+            # Primary-ICP gets is_primary=True → Store key + statistic_ids match
+            # v1.5.x exactly (back-compat; existing users' Energy Dashboard
+            # series continue accruing without an "ID changed" ERROR).
+            for s in self._discovered_electricity_services:
+                is_primary = s.service_id == self._primary_service_id
+                self._importers[("electricity", s.service_id)] = MercuryStatisticsImporter(
+                    self.hass, self._email,
+                    fuel_type="electricity",
+                    service_id=s.service_id,
+                    is_primary=is_primary,
+                )
+            for i, s in enumerate(self._discovered_gas_services):
+                # Gas-primary = first gas service in returned order
+                is_primary = (i == 0)
+                self._importers[("gas", s.service_id)] = MercuryStatisticsImporter(
+                    self.hass, self._email,
+                    fuel_type="gas",
+                    service_id=s.service_id,
+                    is_primary=is_primary,
+                )
+
+            _LOGGER.info(
+                "Mercury CO NZ: discovered %d electricity ICP(s) + %d gas ICP(s); "
+                "primary_electricity=%s; instantiated %d importers",
+                len(self._discovered_electricity_services),
+                len(self._discovered_gas_services),
+                self._primary_service_id,
+                len(self._importers),
+            )
+            self._discovered = True
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.warning(
+                "Mercury CO NZ: ICP discovery failed (will retry next cycle): %s",
+                exc,
+            )
+
+    def _build_importer_data_slice(
+        self,
+        combined_data: dict[str, Any],
+        fuel_type: str,
+        service_id: str,
+        is_primary: bool,
+    ) -> dict[str, Any]:
+        """Build a per-(fuel, ICP) data slice for one MercuryStatisticsImporter.
+
+        The slice maps ICP-prefixed keys back to the keys the importer expects
+        (which are the v1.5.x flat-dict keys). Primary uses top-level keys
+        (back-compat); secondary reads from icp_<token>_<key>.
+        """
+        icp_token = _sanitize_for_key(service_id)
+        slice_data: dict[str, Any] = {
+            "bill_account_id": combined_data.get("bill_account_id"),
+        }
+
+        if fuel_type == "electricity":
+            keys = (
+                "extended_daily_usage_history",
+                "extended_hourly_usage_history",
+                "daily_usage_history",
+                "hourly_usage_history",
+            )
+            for k in keys:
+                if is_primary and k in combined_data:
+                    slice_data[k] = combined_data[k]
+                elif not is_primary:
+                    prefixed = f"icp_{icp_token}_{k}"
+                    if prefixed in combined_data:
+                        slice_data[k] = combined_data[prefixed]
+        else:  # gas
+            if is_primary and "gas_monthly_usage_history" in combined_data:
+                slice_data["gas_monthly_usage_history"] = combined_data["gas_monthly_usage_history"]
+            elif not is_primary:
+                prefixed = f"icp_{icp_token}_gas_monthly_usage_history"
+                if prefixed in combined_data:
+                    slice_data["gas_monthly_usage_history"] = combined_data[prefixed]
+
+        return slice_data
 
     async def _store_hourly_data_json(self, data: dict[str, Any]) -> None:
         """Store cumulative hourly usage data in JSON file (matches daily 180-day retention)."""

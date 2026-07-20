@@ -28,6 +28,10 @@ class MercuryConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Mercury Energy NZ."""
 
     VERSION = 1
+    # MINOR_VERSION 2 (v2.0.0): added _primary_service_id to entry.data (additive,
+    # backward-compatible — v1.5.x ignores the new field). Bumping minor (not major)
+    # keeps HA downgrades from failing setup. See HA blog 2023-12-18 minor-version.
+    MINOR_VERSION = 2
 
     async def _validate_mercury(self, email: str, password: str) -> bool:
         """Validate credentials with Mercury API."""
