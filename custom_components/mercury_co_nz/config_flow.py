@@ -8,10 +8,11 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_PASSWORD
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import DOMAIN, CONF_EMAIL
+from .const import DOMAIN, CONF_EMAIL, CONF_ICP
 from .mercury_api import MercuryAPI
 
 _LOGGER = logging.getLogger(__name__)
@@ -32,6 +33,14 @@ class MercuryConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # backward-compatible — v1.5.x ignores the new field). Bumping minor (not major)
     # keeps HA downgrades from failing setup. See HA blog 2023-12-18 minor-version.
     MINOR_VERSION = 2
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> "MercuryOptionsFlow":
+        """Return the options flow (pin a single ICP for this instance)."""
+        return MercuryOptionsFlow()
 
     async def _validate_mercury(self, email: str, password: str) -> bool:
         """Validate credentials with Mercury API."""
@@ -187,4 +196,56 @@ class MercuryConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="reconfigure",
             data_schema=schema,
             errors=errors,
+        )
+
+
+# Sentinel for "no pin" — vol.In cannot express None as a form value, so the
+# empty string is the wire form and is normalised back to None on submit.
+ALL_ICPS = ""
+
+
+def _icp_label(service: Any) -> str:
+    """Human-readable choice label: address when Mercury gives us one."""
+    address = getattr(service, "address", None)
+    return f"{service.service_id} — {address}" if address else str(service.service_id)
+
+
+class MercuryOptionsFlow(config_entries.OptionsFlow):
+    """Options: pin a single electricity ICP for this HA instance (#30).
+
+    Deliberately no ``__init__``: ``self.config_entry`` is supplied by the base
+    class, and assigning it manually is deprecated since HA 2024.11 (this
+    integration's min_ha_version is 2025.11.0).
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show/handle the ICP selector."""
+        if user_input is not None:
+            # ALL_ICPS ⇒ clear the pin and go back to the default multi-ICP view.
+            return self.async_create_entry(
+                title="", data={CONF_ICP: user_input.get(CONF_ICP) or None}
+            )
+
+        # Choices come from the live coordinator's first-cycle discovery.
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        services = getattr(coordinator, "_discovered_electricity_services", None) or []
+        if not services:
+            return self.async_abort(reason="icps_not_discovered")
+
+        choices = {ALL_ICPS: "All ICPs (default)"}
+        choices.update({s.service_id: _icp_label(s) for s in services})
+
+        current = self.config_entry.options.get(CONF_ICP) or ALL_ICPS
+        if current not in choices:
+            # Pinned ICP is no longer on the account — the coordinator already
+            # warned and fell back to all ICPs; reflect that in the form.
+            current = ALL_ICPS
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {vol.Optional(CONF_ICP, default=current): vol.In(choices)}
+            ),
         )

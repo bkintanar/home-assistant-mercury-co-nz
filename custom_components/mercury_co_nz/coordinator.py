@@ -14,7 +14,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN, CONF_EMAIL, ICP_SCOPED_SENSOR_TYPES, STATISTICS_HOURLY_RETENTION_DAYS
+from .const import (
+    DOMAIN,
+    CONF_EMAIL,
+    CONF_ICP,
+    ICP_SCOPED_SENSOR_TYPES,
+    STATISTICS_HOURLY_RETENTION_DAYS,
+)
 from .mercury_api import MercuryAPI
 from .statistics import MercuryStatisticsImporter, _sanitize_for_key
 
@@ -56,6 +62,10 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
         # Persisted across HA restarts via config_entry.data; first-cycle
         # discovery sets it from services[0] (deterministic) if not already present.
         self._primary_service_id: str | None = config.get("_primary_service_id")
+        # v2.1.0 (#30): the pinned-ICP option this coordinator was built with.
+        # __init__.py's update listener compares against it so that entry.data
+        # writes (the _primary_service_id persist) don't trigger a reload.
+        self.applied_icp_option: str | None = config_entry.options.get(CONF_ICP)
 
         super().__init__(
             hass,
@@ -314,12 +324,17 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                 s for s in complete_data.services if s.is_gas
             ]
 
-            # Designate primary electricity ICP (deterministic: services[0])
+            # Designate primary electricity ICP (deterministic: services[0]).
+            # This is the *discovery* primary — computed and persisted before any
+            # pinned-ICP override, so that clearing the pin reverts exactly to
+            # v2.0.0 behaviour and a Mercury service-order change still can't
+            # silently flip an existing user's primary.
             if self._discovered_electricity_services:
-                self._primary_service_id = (
-                    self._primary_service_id
-                    or self._discovered_electricity_services[0].service_id
-                )
+                all_ids = [
+                    s.service_id for s in self._discovered_electricity_services
+                ]
+                if self._primary_service_id not in all_ids:
+                    self._primary_service_id = all_ids[0]
                 # Persist to config_entry.data so it survives HA restarts
                 if self._primary_service_id != self._config_entry.data.get("_primary_service_id"):
                     self.hass.config_entries.async_update_entry(
@@ -328,6 +343,32 @@ class MercuryDataUpdateCoordinator(DataUpdateCoordinator):
                             **self._config_entry.data,
                             "_primary_service_id": self._primary_service_id,
                         },
+                    )
+
+            # v2.1.0 (#30): pin a single ICP for this HA instance. Making the
+            # selected ICP both the ONLY discovered electricity service AND the
+            # primary is the whole feature — sensor.py iterates this list, and
+            # the account-scoped weekly_*/monthly_* keys are written from the
+            # primary's slice, so summaries and charts scope to it too.
+            # Runtime-only: the pin lives in entry.options and is re-applied on
+            # every discovery, so it is never written to entry.data. That keeps
+            # the persisted discovery primary intact and the pin fully reversible.
+            selected_icp = self._config_entry.options.get(CONF_ICP)
+            if selected_icp:
+                match = [
+                    s
+                    for s in self._discovered_electricity_services
+                    if s.service_id == selected_icp
+                ]
+                if match:
+                    self._discovered_electricity_services = match
+                    self._primary_service_id = selected_icp
+                else:
+                    _LOGGER.warning(
+                        "Mercury CO NZ: pinned ICP %s not found among discovered "
+                        "services %s; ignoring the option and using all ICPs",
+                        selected_icp,
+                        [s.service_id for s in self._discovered_electricity_services],
                     )
 
             # Instantiate one importer per (fuel, ICP) pair.

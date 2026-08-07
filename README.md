@@ -114,7 +114,28 @@ If your Mercury account has multiple ICPs (Installation Control Points — separ
 - **Energy Dashboard**: each ICP has its own selectable source. Add multiple sources under **Settings → Energy → Add electricity grid**.
 - **Statistics**: primary keeps `mercury_co_nz:<acct>_energy_consumption`; secondary uses `mercury_co_nz:<acct>_<icp_token>_energy_consumption`. Same pattern for `_energy_cost`, `_gas_consumption`, `_gas_cost`.
 
-**How "primary" is chosen**: deterministically — the first electricity service returned by Mercury's API. Persisted to the config entry's `_primary_service_id` so it survives HA restarts. This is the v2.0.0 default; manual override via OptionsFlow is planned for v2.1.0+.
+**How "primary" is chosen**: deterministically — the first electricity service returned by Mercury's API. Persisted to the config entry's `_primary_service_id` so it survives HA restarts. To override it, pin an ICP (below).
+
+#### Pin one ICP per HA instance — v2.1.0+
+
+If you run **one Home Assistant instance per address** with all the meters on a single Mercury account, you can scope an instance to just its own ICP.
+
+**Settings → Devices & services → Mercury NZ → Configure → ICP for this instance.** Pick an ICP (choices are labelled with the address Mercury reports) and submit; the integration reloads.
+
+With an ICP pinned:
+
+- Only that ICP's device and entities are created — the other ICPs disappear from this instance.
+- The **weekly/monthly summary sensors and the usage charts** show that ICP's data instead of the primary/combined rollup, because the pinned ICP becomes the primary.
+- Choosing **All ICPs (default)** clears the pin and restores full v2.0.0 behavior. The pin is stored in the entry's *options* and never overwrites the persisted discovery primary, so toggling it is reversible.
+
+Caveats:
+
+- **The bill sensors stay account-wide** (`bill_*`, amount due). Mercury issues one bill per account, so there is nothing to split per ICP.
+- The pin covers **electricity** ICPs only; gas (normally a single service) is unaffected.
+- The pinned ICP writes to the legacy account-based `statistic_id`. On a fresh per-address instance that's exactly what you want; if you pin a *different* ICP on an instance that already has history, that series will show a discontinuity.
+- The picker needs the ICP list, so it's only available after the first poll (~1 coordinator cycle). Before that, Configure aborts with a "not discovered yet" message.
+
+**Note for existing users**: the option defaults to unset, which is byte-for-byte v2.0.0 behavior. Nothing changes unless you pin.
 
 **Gas + multi-ICP**: same model. Gas-primary = first gas service in Mercury's response.
 

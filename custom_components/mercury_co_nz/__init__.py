@@ -12,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.http import HomeAssistantView
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, DEFAULT_SCAN_INTERVAL, URL_BASE
+from .const import DOMAIN, CONF_ICP, DEFAULT_SCAN_INTERVAL, URL_BASE
 from .coordinator import MercuryDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,10 +98,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
     _LOGGER.info(
         "Mercury integration setup complete; sensors (e.g. sensor.mercury_nz_energy_usage) should appear in Developer Tools → States.",
     )
     return True
+
+
+async def _async_entry_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload when the pinned-ICP option changes (v2.1.0, #30).
+
+    A reload is what actually applies the pin: it builds a fresh coordinator
+    (`_discovered = False`), so `_discover_icps_if_needed` re-runs and re-filters
+    the ICP list, and the sensor platform recreates entities from it.
+
+    Only the option matters here. Discovery itself writes `_primary_service_id`
+    into `entry.data`, which also fires this listener — reloading on that would
+    mean an extra pointless setup cycle on first run.
+    """
+    coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is not None and coordinator.applied_icp_option == entry.options.get(
+        CONF_ICP
+    ):
+        return
+    _LOGGER.info(
+        "Mercury CO NZ: pinned ICP option changed to %s; reloading entry",
+        entry.options.get(CONF_ICP) or "All ICPs",
+    )
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:

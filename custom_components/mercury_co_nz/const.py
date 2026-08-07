@@ -25,6 +25,9 @@ JSMODULES: Final[list[dict[str, str]]] = [
 # Configuration keys
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
+# Options key (v2.1.0): pin a single electricity ICP (service_id) for this HA
+# instance. Empty/absent = all ICPs (v2.0.0 behavior).
+CONF_ICP = "icp"
 
 # Default values
 DEFAULT_SCAN_INTERVAL = 5  # minutes
