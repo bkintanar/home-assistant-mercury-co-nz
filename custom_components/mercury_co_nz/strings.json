@@ -35,5 +35,19 @@
       "reconfigure_reload_failed": "Configuration was updated but reload failed. Restart Home Assistant (Settings → System → Restart) so the Mercury integration and sensors load.",
       "reconfigure_failed": "Could not find the integration entry to reconfigure."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mercury ICP selection",
+        "description": "Pin a single ICP (meter) for this Home Assistant instance. When set, sensors, monthly/weekly summaries, and usage charts show only that ICP. Choose \"All ICPs\" to keep the default multi-ICP behaviour. Note: the account bill and amount due stay account-wide — Mercury issues one bill per account, so it cannot be split per ICP.",
+        "data": {
+          "icp": "ICP for this instance"
+        }
+      }
+    },
+    "abort": {
+      "icps_not_discovered": "ICPs have not been discovered yet. Wait for the integration to poll once (about one coordinator cycle after setup), then reopen Configure."
+    }
   }
 }
