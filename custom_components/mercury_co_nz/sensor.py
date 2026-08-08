@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     DOMAIN,
     SENSOR_TYPES,
+    GAS_SENSOR_TYPES,
     ICP_SCOPED_SENSOR_TYPES,
     DEFAULT_NAME,
     CONF_EMAIL,
@@ -54,9 +55,22 @@ async def async_setup_entry(
     email = config_entry.data[CONF_EMAIL]
     entities: list[MercurySensor] = []
 
+    # v2.1.1 (#27): don't create gas entities for accounts with no gas service.
+    # The gas data fetch and statistics import are already gated on is_gas, but
+    # the entities were created unconditionally, leaving electricity-only
+    # customers with two permanently-0 gas sensors.
+    #
+    # Gated on `_discovered` too, not just an empty gas list: discovery has its
+    # own try/except, so it can fail while the rest of the cycle succeeds. In
+    # that case fall back to the old unconditional behavior rather than silently
+    # dropping a real gas customer's entities.
+    skip_gas = coordinator._discovered and not coordinator._discovered_gas_services
+
     # Account-scoped sensors — single instance per account, attached to parent device
     for sensor_type in SENSOR_TYPES:
         if sensor_type in ICP_SCOPED_SENSOR_TYPES:
+            continue
+        if skip_gas and sensor_type in GAS_SENSOR_TYPES:
             continue
         entities.append(
             MercurySensor(
@@ -79,12 +93,16 @@ async def async_setup_entry(
             )
 
     async_add_entities(entities)
+    account_scoped = len(SENSOR_TYPES) - len(ICP_SCOPED_SENSOR_TYPES)
+    if skip_gas:
+        account_scoped -= len(GAS_SENSOR_TYPES)
     _LOGGER.info(
-        "Mercury CO NZ: registered %d entities (account-scoped: %d, ICP-scoped: %d × %d ICPs)",
+        "Mercury CO NZ: registered %d entities (account-scoped: %d, ICP-scoped: %d × %d ICPs)%s",
         len(entities),
-        len(SENSOR_TYPES) - len(ICP_SCOPED_SENSOR_TYPES),
+        account_scoped,
         len(ICP_SCOPED_SENSOR_TYPES),
         len(coordinator._discovered_electricity_services),
+        "; no gas service on this account, gas sensors skipped" if skip_gas else "",
     )
 
 

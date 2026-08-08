@@ -370,6 +370,15 @@ ICP_SCOPED_SENSOR_TYPES: Final[frozenset[str]] = frozenset({
     "plan_icp_number",
     "plan_is_pending_plan_change",
 })
+
+# Gas-only sensor types (v2.1.1, #27). Skipped entirely for accounts with no gas
+# service — electricity-only customers were getting two permanently-0 entities.
+# Declarative set rather than a `gas_` string match: bill_gas_amount doesn't
+# carry the prefix, and the gas data/statistics gates are already explicit.
+GAS_SENSOR_TYPES: Final[frozenset[str]] = frozenset({
+    "gas_monthly_usage",
+    "bill_gas_amount",
+})
 NZ_TIMEZONE: Final[str] = "Pacific/Auckland"
 STATISTICS_BACKFILL_DAYS: Final[int] = 180  # matches the daily JSON retention cap
 STATISTICS_HOURLY_RETENTION_DAYS: Final[int] = 180  # hourly cache retention; matches daily cap so Energy Dashboard hourly profile spans the same window
