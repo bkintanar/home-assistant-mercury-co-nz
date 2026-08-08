@@ -14,15 +14,25 @@ invoice period anchored at invoice_to.
 # pylint: disable=protected-access
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from homeassistant.const import CONF_PASSWORD
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
 from custom_components.mercury_co_nz.const import (
+    CONF_EMAIL,
     DOMAIN,
+    GAS_SENSOR_TYPES,
     STATISTICS_GAS_CONSUMPTION_SUFFIX,
     STATISTICS_GAS_COST_SUFFIX,
 )
+from custom_components.mercury_co_nz.coordinator import MercuryDataUpdateCoordinator
 from custom_components.mercury_co_nz.mercury_api import _collapse_gas_pairs
+from custom_components.mercury_co_nz.sensor import (
+    async_setup_entry as sensor_async_setup_entry,
+)
 from custom_components.mercury_co_nz.statistics import MercuryStatisticsImporter
 
 
@@ -479,3 +489,73 @@ def test_hourly_entries_skip_slot_at_cutoff_to_prevent_compounding() -> None:
     )
     assert skipped == 0
     assert energy == []  # no re-emission
+
+
+# ----------------------------------------------------------------------------
+# v2.1.1 (#27): gas entities only exist for accounts that have a gas service
+# ----------------------------------------------------------------------------
+
+
+def _svc(service_id: str, group: str = "electricity"):
+    """Stand-in for pymercury's Service."""
+    return SimpleNamespace(
+        service_id=service_id,
+        address=None,
+        is_electricity=group == "electricity",
+        is_gas=group == "gas",
+    )
+
+
+async def _setup_sensor_platform(hass, services: list, *, discovered: bool = True):
+    """Run the sensor platform's async_setup_entry and return the entity keys."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_EMAIL: "user@example.com", CONF_PASSWORD: "hunter2"},
+    )
+    entry.add_to_hass(hass)
+
+    coordinator = MercuryDataUpdateCoordinator(hass, entry, timedelta(minutes=5))
+    coordinator.api._client = MagicMock()
+    coordinator.api._client.get_complete_account_data = MagicMock(
+        return_value=SimpleNamespace(services=services)
+    )
+    await coordinator._discover_icps_if_needed()
+    if not discovered:
+        # Simulate discovery having failed while the rest of the cycle succeeded.
+        coordinator._discovered = False
+        coordinator._discovered_gas_services = []
+    coordinator.last_update_success = True
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    added: list = []
+    await sensor_async_setup_entry(hass, entry, lambda new, *a, **kw: added.extend(new))
+    return {e._sensor_type for e in added}
+
+
+async def test_gas_sensors_absent_for_electricity_only_account(hass) -> None:
+    """#27: electricity-only customers were getting two permanently-0 gas
+    entities. Neither may be created when the account has no gas service."""
+    keys = await _setup_sensor_platform(hass, [_svc("ICP_E1")])
+    assert GAS_SENSOR_TYPES.isdisjoint(keys)
+
+
+async def test_electricity_sensors_still_created_without_gas(hass) -> None:
+    """Gating gas must not take any electricity entity with it."""
+    keys = await _setup_sensor_platform(hass, [_svc("ICP_E1")])
+    assert "total_usage" in keys
+    assert "bill_due_amount" in keys
+
+
+async def test_gas_sensors_present_when_account_has_gas(hass) -> None:
+    keys = await _setup_sensor_platform(
+        hass, [_svc("ICP_E1"), _svc("ICP_G1", group="gas")]
+    )
+    assert GAS_SENSOR_TYPES.issubset(keys)
+
+
+async def test_gas_sensors_kept_when_discovery_did_not_run(hass) -> None:
+    """Discovery has its own try/except, so it can fail while the cycle succeeds.
+    An empty gas list is then 'unknown', not 'no gas' — fall back to the old
+    unconditional behavior rather than dropping a real gas customer's entities."""
+    keys = await _setup_sensor_platform(hass, [_svc("ICP_E1")], discovered=False)
+    assert GAS_SENSOR_TYPES.issubset(keys)

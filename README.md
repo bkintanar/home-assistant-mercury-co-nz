@@ -149,6 +149,8 @@ Caveats:
 
 If your Mercury account includes gas service (alongside electricity, or gas-only), v1.4.0+ automatically imports gas consumption + cost into Home Assistant's Energy Dashboard at **monthly granularity**.
 
+**Electricity-only accounts get no gas entities at all** (v2.1.1+). Earlier versions created `gas_monthly_usage` and `bill_gas_amount` unconditionally, so electricity-only customers saw two sensors permanently stuck at `0`. After upgrading, those two become orphaned entities — HA will show them as unavailable/restored, and you can delete them from **Settings → Devices & services → Entities**.
+
 **Why monthly only?** Mercury's gas API does not expose daily or hourly data — only monthly invoice-period aggregates. The integration emits one statistics entry per Mercury invoice period (typically one month), anchored at the end of the period.
 
 **What this looks like in HA:**
