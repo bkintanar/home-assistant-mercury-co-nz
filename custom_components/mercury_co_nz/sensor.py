@@ -74,7 +74,7 @@ async def async_setup_entry(
             continue
         entities.append(
             MercurySensor(
-                coordinator, sensor_type, name, email,
+                coordinator, sensor_type, name, email, config_entry,
                 service_id=None, is_primary=True, fuel_type=None,
             )
         )
@@ -85,7 +85,7 @@ async def async_setup_entry(
         for sensor_type in ICP_SCOPED_SENSOR_TYPES:
             entities.append(
                 MercurySensor(
-                    coordinator, sensor_type, name, email,
+                    coordinator, sensor_type, name, email, config_entry,
                     service_id=service.service_id,
                     is_primary=is_primary,
                     fuel_type="electricity",
@@ -124,6 +124,7 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
         sensor_type: str,
         name: str,
         email: str,
+        config_entry: ConfigEntry,
         service_id: str | None = None,
         is_primary: bool = True,
         fuel_type: str | None = None,
@@ -141,6 +142,7 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
 
         self._sensor_type = sensor_type
         self._email = email
+        self._config_entry = config_entry
         self._service_id = service_id
         self._is_primary = is_primary
         self._fuel_type = fuel_type
@@ -186,12 +188,14 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
 
         v2.0.0 + v1.6.1: account-scoped sensors attach to the parent device
         (one per email); ICP-scoped sensors attach to per-ICP child devices
-        linked via `via_device`. Neither device.name includes the user's
+        linked via `via_device_id`. Neither device.name includes the user's
         email anymore — HA's entity_id slug pulled the email into every
         new entity in v1.6.0 era. Multi-account users are still uniquely
         keyed by the `(DOMAIN, email)` identifier tuple; only the displayed
         name simplifies.
         """
+        from homeassistant.helpers import device_registry as dr
+        
         if self._service_id is None:
             # Account-scoped — parent device
             return {
@@ -200,8 +204,15 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
                 "manufacturer": "Mercury Energy",
                 "model": "Account",
             }
-        # ICP-scoped — child device with via_device parent
-        return {
+        # ICP-scoped — child device with via_device_id parent
+        # Get the device registry to look up the parent device ID
+        device_registry = dr.async_get(self.hass)
+        parent_device = device_registry.async_get_device_by_identifier(
+            self._config_entry,
+            (DOMAIN, self._email)
+        )
+        
+        device_info = {
             "identifiers": {(DOMAIN, f"{self._email}_{self._service_id}")},
             "name": (
                 f"ICP {self._service_id}"
@@ -214,8 +225,13 @@ class MercurySensor(CoordinatorEntity, SensorEntity):
             ),
             "manufacturer": "Mercury Energy",
             "model": f"{(self._fuel_type or 'electricity').title()} Meter",
-            "via_device": (DOMAIN, self._email),
         }
+        
+        # Only add via_device_id if parent device exists
+        if parent_device:
+            device_info["via_device_id"] = parent_device.id
+            
+        return device_info
 
     @property
     def native_unit_of_measurement(self):
