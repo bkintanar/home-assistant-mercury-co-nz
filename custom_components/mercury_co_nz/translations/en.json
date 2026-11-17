@@ -1,0 +1,91 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mercury.co.nz",
+        "description": "Enter your Mercury.co.nz account credentials",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Mercury",
+        "description": "Update your Mercury account email or password. After saving, the integration will reload and sensors will refresh.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "already_configured_update": {
+        "title": "Account already set up",
+        "description": "This Mercury account ({email}) is already in Home Assistant but may not have loaded (no sensors). Submit below to remove the old entry and add a fresh one so the integration and sensors are created.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Mercury.co.nz. Please check your credentials and try again."
+    },
+    "abort": {
+      "already_configured": "This Mercury account is already set up. If you don't see sensors (e.g. sensor.mercury_nz_energy_usage), go to Settings → Devices & services, search 'Mercury', open the Mercury NZ integration, and click **Reload** (or restart Home Assistant). Use Developer Tools → States and search 'mercury' to see entity IDs.",
+      "reconfigure_successful": "Configuration updated. The Mercury integration may only appear under HACS in Devices & services (Settings → Devices & services → click HACS → find Mercury NZ). Your sensors should now be available: go to Developer Tools → States, search 'mercury', and use sensor.mercury_nz_energy_usage in your dashboard cards.",
+      "reconfigure_reload_failed": "Configuration was updated but reload failed. Restart Home Assistant (Settings → System → Restart) so the Mercury integration and sensors load.",
+      "reconfigure_failed": "Could not find the integration entry to reconfigure."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mercury settings",
+        "menu_options": {
+          "tariff_meter": "Meter tariff schedules",
+          "meters": "Meters to include"
+        }
+      },
+      "tariff": {
+        "title": "Day/night schedule",
+        "description": "Configure {meter}.\n\n{suggestion}\n\nCheck and edit the hours, weekend rule, time basis and start date for your Mercury Flat Rates tariff before enabling. The day rate applies outside the night period. This calculates a scheduled rate and usage split, not a live billing signal. Only whole-hour boundaries are supported; multiple peak periods and public-holiday exceptions are not. Changing the schedule creates new statistics and retains the old ones.",
+        "data": {
+          "enabled": "Enable this meter’s schedule",
+          "night_start": "Night rate starts",
+          "night_end": "Night rate ends",
+          "start_date": "Apply schedule from date (YYYY-MM-DD)",
+          "time_zone": "Time basis",
+          "weekend_night": "Use night rate all Saturday and Sunday"
+        }
+      },
+      "meters": {
+        "title": "Meters to include",
+        "description": "Pin a single ICP (meter) for this Home Assistant instance. When set, sensors, monthly/weekly summaries, and usage charts show only that ICP. Choose \"All ICPs\" to keep the default multi-ICP behaviour. Note: the account bill and amount due stay account-wide — Mercury issues one bill per account, so it cannot be split per ICP.",
+        "data": {
+          "icp": "ICP for this instance"
+        }
+      },
+      "tariff_meter": {
+        "title": "Meter tariff schedules",
+        "description": "Choose the meter whose schedule you want to edit. Each meter keeps its own settings.",
+        "data": {
+          "tariff_meter": "Meter"
+        }
+      },
+      "tariff_network": {
+        "title": "Lines company / region",
+        "description": "Choose a published schedule for {meter}, or keep your current hours. Presets are suggestions for Flat Rates meter tariffs, not confirmation of Mercury billing hours. All fields remain editable on the next screen. Selecting a preset disables the schedule until you enable it again. Networks without a verified compatible schedule require manual hours.",
+        "data": {
+          "network_tariff": "Lines company / region and tariff"
+        }
+      }
+    },
+    "abort": {
+      "icps_not_discovered": "ICPs have not been discovered yet. Wait for the integration to poll once (about one coordinator cycle after setup), then reopen Configure."
+    },
+    "error": {
+      "invalid_tariff_schedule": "Enter both whole-hour start/end times (different from each other), a valid date, and a supported time basis before enabling.",
+      "invalid_meter": "Select a meter currently on this account.",
+      "invalid_network": "Choose a listed lines company or manual hours."
+    }
+  }
+}

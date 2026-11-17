@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.mercury_co_nz.const import (
     CHART_ATTRIBUTE_DAILY_DAYS,
@@ -77,7 +78,8 @@ def _coordinator_with_synthetic_data():
 
 def _make_sensor(sensor_type: str) -> MercurySensor:
     coord = _coordinator_with_synthetic_data()
-    return MercurySensor(coord, sensor_type, DEFAULT_NAME, "test@example.com")
+    return MercurySensor(coord, sensor_type, DEFAULT_NAME, "test@example.com",
+                         MockConfigEntry(domain="mercury_co_nz", data={}))
 
 
 @pytest.mark.parametrize("sensor_type", ["energy_usage", "total_usage", "current_bill"])
@@ -173,7 +175,7 @@ def test_data_source_label_uses_non_extended_when_extended_is_empty_list() -> No
         ],
     }
     coord.last_update_success = True
-    sensor = MercurySensor(coord, "energy_usage", DEFAULT_NAME, "test@example.com")
+    sensor = MercurySensor(coord, "energy_usage", DEFAULT_NAME, "test@example.com", MockConfigEntry(domain="mercury_co_nz", data={}))
     attrs = sensor.extra_state_attributes
     # Should use the non-extended source AND label data_source correctly.
     assert attrs["data_source"] == "mercury_energy_api", (
@@ -251,7 +253,7 @@ def test_gas_monthly_usage_sensor_exposes_chart_history() -> None:
     hass.states[entity_id].attributes.gas_monthly_usage_history.
     """
     coord = _coordinator_with_gas_data()
-    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com")
+    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com", MockConfigEntry(domain="mercury_co_nz", data={}))
 
     attrs = sensor.extra_state_attributes
     assert attrs["gas_monthly_usage_history"] == coord.data["gas_monthly_usage_history"]
@@ -267,7 +269,7 @@ def test_gas_monthly_usage_sensor_exposes_chart_history() -> None:
 def test_gas_monthly_usage_native_value_reads_total() -> None:
     """The sensor's native_value must be the kWh scalar, not the history list."""
     coord = _coordinator_with_gas_data()
-    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com")
+    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com", MockConfigEntry(domain="mercury_co_nz", data={}))
     assert sensor.native_value == 4842.0
 
 
@@ -285,7 +287,7 @@ def test_electricity_sensors_do_not_get_gas_attributes() -> None:
     coord.data["gas_monthly_usage"] = 460.0
     coord.data["gas_monthly_cost"] = 156.28
 
-    sensor = MercurySensor(coord, "energy_usage", DEFAULT_NAME, "test@example.com")
+    sensor = MercurySensor(coord, "energy_usage", DEFAULT_NAME, "test@example.com", MockConfigEntry(domain="mercury_co_nz", data={}))
     attrs = sensor.extra_state_attributes
 
     assert "gas_monthly_usage_history" not in attrs
@@ -319,7 +321,7 @@ def test_gas_sensor_stays_under_safety_budget() -> None:
     }
     coord.last_update_success = True
 
-    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com")
+    sensor = MercurySensor(coord, "gas_monthly_usage", DEFAULT_NAME, "test@example.com", MockConfigEntry(domain="mercury_co_nz", data={}))
     serialized = json.dumps(sensor.extra_state_attributes)
     assert len(serialized) < SAFETY_BUDGET, (
         f"gas_monthly_usage attributes are {len(serialized)} bytes; "

@@ -1,2 +1,1 @@
-"""Test fixtures for Mercury Energy NZ tests."""
-pytest_plugins = ["pytest_homeassistant_custom_component"]
+"""Shared Home Assistant fixtures are registered in the root conftest.py."""

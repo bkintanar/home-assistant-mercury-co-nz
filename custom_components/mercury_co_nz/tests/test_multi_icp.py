@@ -168,8 +168,8 @@ def test_secondary_name_says_icp_token() -> None:
 
 
 def test_icp_scoped_sensor_set_count() -> None:
-    """ICP_SCOPED_SENSOR_TYPES must contain exactly the 14 per-meter keys."""
-    assert len(ICP_SCOPED_SENSOR_TYPES) == 14
+    """ICP_SCOPED_SENSOR_TYPES must contain the original 14 plus 6 tariff/diagnostic keys."""
+    assert len(ICP_SCOPED_SENSOR_TYPES) == 20
 
 
 def test_account_scoped_sensors_excluded_from_icp_set() -> None:
@@ -289,6 +289,7 @@ async def test_pinned_icp_becomes_primary(hass) -> None:
     coordinator, _ = await _discover(
         hass, [_svc(ICP_A), _svc(ICP_B)], options={CONF_ICP: ICP_B}
     )
+    assert {s.service_id for s in coordinator._all_electricity_services} == {ICP_A, ICP_B}
     assert coordinator._primary_service_id == ICP_B
 
 
@@ -389,6 +390,7 @@ async def _entry_with_coordinator(hass, services, options=None) -> MockConfigEnt
     entry.add_to_hass(hass)
     coordinator = MagicMock()
     coordinator._discovered_electricity_services = services
+    coordinator._all_electricity_services = services
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     return entry
 
@@ -400,7 +402,7 @@ async def test_options_flow_lists_discovered_icps_with_addresses(hass) -> None:
         hass,
         [_svc(ICP_A, address="1 Queen St"), _svc(ICP_B, address="2 King St")],
     )
-    result = await _options_flow(hass, entry).async_step_init()
+    result = await _options_flow(hass, entry).async_step_meters()
 
     assert result["type"] == FlowResultType.FORM
     choices = result["data_schema"].schema[CONF_ICP].container
@@ -411,7 +413,7 @@ async def test_options_flow_lists_discovered_icps_with_addresses(hass) -> None:
 async def test_options_flow_aborts_before_first_discovery(hass) -> None:
     """No ICP list yet ⇒ tell the user to wait rather than showing an empty picker."""
     entry = await _entry_with_coordinator(hass, [])
-    result = await _options_flow(hass, entry).async_step_init()
+    result = await _options_flow(hass, entry).async_step_meters()
 
     assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "icps_not_discovered"
@@ -419,7 +421,7 @@ async def test_options_flow_aborts_before_first_discovery(hass) -> None:
 
 async def test_options_flow_stores_selection(hass) -> None:
     entry = await _entry_with_coordinator(hass, [_svc(ICP_A), _svc(ICP_B)])
-    result = await _options_flow(hass, entry).async_step_init({CONF_ICP: ICP_B})
+    result = await _options_flow(hass, entry).async_step_meters({CONF_ICP: ICP_B})
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"] == {CONF_ICP: ICP_B}
@@ -430,7 +432,7 @@ async def test_options_flow_all_icps_clears_the_pin(hass) -> None:
     entry = await _entry_with_coordinator(
         hass, [_svc(ICP_A), _svc(ICP_B)], options={CONF_ICP: ICP_B}
     )
-    result = await _options_flow(hass, entry).async_step_init({CONF_ICP: ""})
+    result = await _options_flow(hass, entry).async_step_meters({CONF_ICP: ""})
 
     assert result["data"] == {CONF_ICP: None}
 
@@ -440,7 +442,7 @@ async def test_options_flow_defaults_to_all_when_pin_is_stale(hass) -> None:
     entry = await _entry_with_coordinator(
         hass, [_svc(ICP_A)], options={CONF_ICP: "ICP_GONE"}
     )
-    result = await _options_flow(hass, entry).async_step_init()
+    result = await _options_flow(hass, entry).async_step_meters()
 
     # The default lives on the vol.Optional marker, not on the vol.In validator.
     marker = next(k for k in result["data_schema"].schema if k == CONF_ICP)

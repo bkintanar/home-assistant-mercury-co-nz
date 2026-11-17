@@ -14,6 +14,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DOMAIN, CONF_EMAIL, CONF_ICP
 from .mercury_api import MercuryAPI
+from .network_tariffs import MANUAL, NETWORK_TARIFFS, REVIEWED
+from .tariff import CONF_TARIFF_SCHEDULES, Schedule
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -211,41 +213,194 @@ def _icp_label(service: Any) -> str:
 
 
 class MercuryOptionsFlow(config_entries.OptionsFlow):
-    """Options: pin a single electricity ICP for this HA instance (#30).
+    """Options: meter visibility and independent, manually confirmed tariff schedules.
 
     Deliberately no ``__init__``: ``self.config_entry`` is supplied by the base
     class, and assigning it manually is deprecated since HA 2024.11 (this
     integration's min_ha_version is 2025.11.0).
     """
 
+    def _meter_choices(self) -> dict[str, str]:
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        services = (
+            getattr(coordinator, "_all_electricity_services", None)
+            or getattr(coordinator, "_discovered_electricity_services", None)
+            or []
+        )
+        return {s.service_id: _icp_label(s) for s in services}
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Show/handle the ICP selector."""
-        if user_input is not None:
-            # ALL_ICPS ⇒ clear the pin and go back to the default multi-ICP view.
-            return self.async_create_entry(
-                title="", data={CONF_ICP: user_input.get(CONF_ICP) or None}
-            )
-
-        # Choices come from the live coordinator's first-cycle discovery.
-        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
-        services = getattr(coordinator, "_discovered_electricity_services", None) or []
-        if not services:
+        """Keep meter visibility separate from each meter's tariff settings."""
+        if not self._meter_choices():
             return self.async_abort(reason="icps_not_discovered")
+        return self.async_show_menu(
+            step_id="init", menu_options=["tariff_meter", "meters"]
+        )
 
-        choices = {ALL_ICPS: "All ICPs (default)"}
-        choices.update({s.service_id: _icp_label(s) for s in services})
-
+    async def async_step_meters(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Optionally limit the integration to one discovered meter."""
+        meters = self._meter_choices()
+        if not meters:
+            return self.async_abort(reason="icps_not_discovered")
+        if user_input is not None:
+            return self.async_create_entry(
+                title="",
+                data={
+                    **self.config_entry.options,
+                    CONF_ICP: user_input.get(CONF_ICP) or None,
+                },
+            )
+        choices = {ALL_ICPS: "All ICPs (default)", **meters}
         current = self.config_entry.options.get(CONF_ICP) or ALL_ICPS
         if current not in choices:
-            # Pinned ICP is no longer on the account — the coordinator already
-            # warned and fell back to all ICPs; reflect that in the form.
             current = ALL_ICPS
-
         return self.async_show_form(
-            step_id="init",
+            step_id="meters",
             data_schema=vol.Schema(
-                {vol.Optional(CONF_ICP, default=current): vol.In(choices)}
+                {
+                    vol.Optional(CONF_ICP, default=current): vol.In(choices),
+                }
+            ),
+        )
+
+    async def async_step_tariff_meter(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Select a meter only when the account has more than one."""
+        choices = self._meter_choices()
+        if not choices:
+            return self.async_abort(reason="icps_not_discovered")
+        if len(choices) == 1:
+            self._tariff_meter = next(iter(choices))
+        elif user_input is not None and user_input.get("tariff_meter") in choices:
+            self._tariff_meter = user_input["tariff_meter"]
+        else:
+            return self.async_show_form(
+                step_id="tariff_meter",
+                data_schema=vol.Schema(
+                    {
+                        vol.Required("tariff_meter"): vol.In(choices),
+                    }
+                ),
+                errors={"base": "invalid_meter"} if user_input is not None else {},
+            )
+        self._tariff_values = dict(
+            self.config_entry.options.get(CONF_TARIFF_SCHEDULES, {}).get(
+                self._tariff_meter, {}
+            )
+        )
+        return await self.async_step_tariff_network()
+
+    async def async_step_tariff_network(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Apply a suggestion once; saved overrides are never refreshed from it."""
+        choices = {
+            MANUAL: "Keep current hours / enter manually",
+            **{
+                key: preset.label + (" — manual hours" if not preset.defaults else "")
+                for key, preset in NETWORK_TARIFFS.items()
+            },
+        }
+        errors = {}
+        if user_input is not None:
+            selected = user_input.get("network_tariff")
+            if selected not in choices:
+                errors["base"] = "invalid_network"
+            else:
+                if selected != MANUAL:
+                    # Clear old hours even when the new network has no preset:
+                    # never attribute another network's hours to this choice.
+                    for key in ("night_start", "night_end", "weekend_night"):
+                        self._tariff_values.pop(key, None)
+                    self._tariff_values.update(
+                        network_tariff=selected,
+                        network_reviewed=REVIEWED,
+                        enabled=False,
+                        time_zone="Pacific/Auckland",
+                        **NETWORK_TARIFFS[selected].defaults,
+                    )
+                return await self.async_step_tariff()
+        return self.async_show_form(
+            step_id="tariff_network",
+            description_placeholders={"meter": self._meter_choices()[self._tariff_meter]},
+            data_schema=vol.Schema(
+                {vol.Required("network_tariff", default=MANUAL): vol.In(choices)}
+            ),
+            errors=errors,
+        )
+
+    async def async_step_tariff(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure one meter; never assume another meter has the same tariff."""
+        from homeassistant.util import dt as dt_util
+
+        values = dict(self._tariff_values)
+        errors = {}
+        if user_input is not None:
+            values.update(user_input)
+            try:
+                Schedule.from_options(values)
+            except (KeyError, ValueError, TypeError):
+                errors["base"] = "invalid_tariff_schedule"
+            else:
+                schedules = dict(
+                    self.config_entry.options.get(CONF_TARIFF_SCHEDULES, {})
+                )
+                schedules[self._tariff_meter] = values
+                return self.async_create_entry(
+                    title="",
+                    data={
+                        **self.config_entry.options,
+                        CONF_TARIFF_SCHEDULES: schedules,
+                    },
+                )
+        self._tariff_values = values
+        preset = NETWORK_TARIFFS.get(values.get("network_tariff"))
+        suggestion = "No network preset selected. Enter your confirmed tariff hours."
+        if preset:
+            suggestion = (
+                f"{preset.label}. {preset.note} "
+                f"[Published schedule]({preset.source}) "
+                f"(catalogue checked {REVIEWED}). Your saved hours may differ from this suggestion."
+            )
+        hours = {f"{h:02d}:00": f"{h:02d}:00" for h in range(24)}
+        return self.async_show_form(
+            step_id="tariff",
+            errors=errors,
+            description_placeholders={
+                "meter": self._meter_choices()[self._tariff_meter],
+                "suggestion": suggestion,
+            },
+            data_schema=vol.Schema(
+                {
+                    vol.Required("enabled", default=values.get("enabled", False)): bool,
+                    vol.Optional(
+                        "night_start", default=values.get("night_start", vol.UNDEFINED)
+                    ): vol.In(hours),
+                    vol.Optional(
+                        "night_end", default=values.get("night_end", vol.UNDEFINED)
+                    ): vol.In(hours),
+                    vol.Required(
+                        "weekend_night", default=values.get("weekend_night", False)
+                    ): bool,
+                    vol.Required(
+                        "start_date",
+                        default=values.get("start_date", str(dt_util.now().date())),
+                    ): str,
+                    vol.Required(
+                        "time_zone", default=values.get("time_zone", "Pacific/Auckland")
+                    ): vol.In(
+                        {
+                            "Pacific/Auckland": "New Zealand local time (follows daylight saving)",
+                            "Etc/GMT-12": "Fixed NZ standard time (UTC+12 all year)",
+                        }
+                    ),
+                }
             ),
         )

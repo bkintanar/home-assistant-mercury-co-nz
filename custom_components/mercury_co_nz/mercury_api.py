@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 from typing import Any
 
 import aiohttp
@@ -83,6 +85,7 @@ class MercuryAPI:
         self._password = password
         self._client = None
         self._authenticated = False
+        self._meter_cache = {}
 
     async def authenticate(self) -> bool:
         """Authenticate with Mercury Energy using pymercury library."""
@@ -598,7 +601,7 @@ class MercuryAPI:
         ):
             numeric = numeric / 100.0
 
-        return round(numeric, 6)
+        return round(numeric, 6) if math.isfinite(numeric) else None
 
     def _normalize_plans_data(self, plans_data: Any) -> dict[str, Any]:
         """Normalize ElectricityPlans data to a flat dict.
@@ -643,6 +646,25 @@ class MercuryAPI:
                 "can_change_plan": "yes" if plans_dict.get("can_change_plan") else "no",
                 "is_pending_plan_change": "yes" if plans_dict.get("is_pending_plan_change") else "no",
             }
+
+            raw = plans_dict.get("raw_data") or plans_dict
+            current = plans_dict.get("current_plan") or raw.get("currentPlan") or {}
+            charges = current.get("charges") or {}
+            def rates(rows):
+                return [{"name": row.get("name", ""),
+                         "rate": self._parse_rate_amount(row.get("rate"), row.get("measure")),
+                         "measure": row.get("measure", "")}
+                        for row in rows if isinstance(row, dict)]
+            unit_rates = rates(plans_dict.get("unit_rates") or charges.get("unitRates") or [])
+            normalized["unit_rates"] = unit_rates
+            normalized["generation_rates"] = rates(charges.get("generationRates") or [])
+            normalized["other_charges"] = rates(plans_dict.get("other_charges") or charges.get("otherCharges") or [])
+            normalized["plan_code"] = current.get("displayPlanId") or current.get("planId")
+            normalized["plan_name"] = current.get("planName") or current.get("name")
+            normalized["is_time_of_use"] = current.get("isTouPlan")
+            for period in ("day", "night"):
+                matches = [r["rate"] for r in unit_rates if r["name"].strip().lower() in (period, f"tui {period}")]
+                normalized[f"{period}_rate"] = matches[0] if len(matches) == 1 else None
 
             _LOGGER.debug("Normalized plans data: %s", normalized)
             return normalized
@@ -777,6 +799,35 @@ class MercuryAPI:
             _LOGGER.error("❌ Error normalizing usage content data: %s", exc)
             return {}
 
+    async def _get_meter_registers(self, customer_id, account_id, service_id):
+        cache = getattr(self, "_meter_cache", None)
+        if cache is None:
+            self._meter_cache = cache = {}
+        key = (customer_id, account_id, service_id)
+        previous = cache.get(key)
+        if previous and time.monotonic() - previous[0] < 6 * 3600:
+            return previous[1]
+        method = getattr(self._client._api_client, "get_electricity_meter_reads", None)
+        if method is None:
+            return {}
+        try:
+            reads = await asyncio.get_running_loop().run_in_executor(None, method, customer_id, account_id, service_id)
+            if reads is None:
+                return {}
+            raw = reads.raw_data
+            meters = raw.get("meterReads", []) if isinstance(raw, dict) else raw
+            # Allowlist fields: do not copy raw account/address data into HA.
+            registers = [{"meter": meter.get("meterNumber"), "register": row.get("registerNumber"),
+                          "reading": row.get("lastReading"), "read_at": row.get("lastReadDate"),
+                          "read_type": row.get("lastReadType")}
+                         for meter in meters for row in meter.get("registers", [])]
+            result = {"meter_register_count": len(registers), "meter_registers": registers}
+            cache[key] = (time.monotonic(), result)
+            return result
+        except Exception:  # Optional endpoint must not interrupt usage collection.
+            _LOGGER.warning("Could not refresh Mercury meter registers for service %s", service_id)
+            return {}
+
     async def get_usage_data(self, _retry_count: int = 0) -> dict[str, dict[str, Any]]:
         """Get usage data per electricity ICP (v2.0.0 multi-ICP).
 
@@ -865,6 +916,9 @@ class MercuryAPI:
                 )
                 normalized_data.update(monthly_result)
 
+                # Meter registers are billed readings, not live counters. Cache
+                # for six hours rather than adding a request on every poll.
+                normalized_data.update(await self._get_meter_registers(customer_id, account_id, service_id))
                 normalized_data["customer_id"] = customer_id
                 from datetime import datetime
                 normalized_data["last_updated"] = datetime.now().isoformat()
