@@ -298,7 +298,7 @@ SENSOR_TYPES = {
     # the same pattern. The unit "NZD/kWh" is the form dynamic_energy_cost parses
     # correctly (it extracts only the /kWh denominator).
     "plan_anytime_rate": {
-        "name": "Current Rate",
+        "name": "Rate — current",
         "unit": "NZD/kWh",
         "icon": "mdi:cash-multiple",
         "device_class": None,
@@ -370,6 +370,48 @@ ICP_SCOPED_SENSOR_TYPES: Final[frozenset[str]] = frozenset({
     "plan_icp_number",
     "plan_is_pending_plan_change",
 })
+
+# Tariff and source diagnostics: missing data stays unknown, never zero.
+TARIFF_SENSOR_TYPES = {
+    "plan_day_rate": {
+        "name": "Rate — day",
+        "unit": "NZD/kWh",
+        "state_class": "measurement",
+        "icon": "mdi:white-balance-sunny",
+    },
+    "plan_night_rate": {
+        "name": "Rate — night",
+        "unit": "NZD/kWh",
+        "state_class": "measurement",
+        "icon": "mdi:weather-night",
+    },
+    "tariff_period": {
+        "name": "Tariff — scheduled period",
+        "unit": None,
+        "icon": "mdi:clock-outline",
+    },
+    "usage_latest_reading": {
+        "entity_category": "diagnostic",
+        "name": "Reading — latest time",
+        "unit": None,
+        "icon": "mdi:calendar-clock",
+        "device_class": "timestamp",
+    },
+    "usage_read_type": {
+        "entity_category": "diagnostic",
+        "name": "Reading — type",
+        "unit": None,
+        "icon": "mdi:check-decagram",
+    },
+    "meter_register_count": {
+        "entity_category": "diagnostic",
+        "name": "Reading — registers",
+        "unit": None,
+        "icon": "mdi:counter",
+    },
+}
+SENSOR_TYPES.update(TARIFF_SENSOR_TYPES)
+ICP_SCOPED_SENSOR_TYPES = ICP_SCOPED_SENSOR_TYPES | TARIFF_SENSOR_TYPES.keys()
 
 # Gas-only sensor types (v2.1.1, #27). Skipped entirely for accounts with no gas
 # service — electricity-only customers were getting two permanently-0 entities.

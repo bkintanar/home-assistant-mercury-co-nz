@@ -83,6 +83,15 @@ and kWh. Requires a Mercury account with gas service.
 - **Smart Date Ranges**: When limited data available, shows shifted date ranges for meaningful navigation
 - **Tooltip Management**: Automatically hides tooltips during navigation
 
+### ⚡ Flat Rates Plans and Meter Details
+
+Mercury’s **Flat Rates** plans use the local meter tariffs at the property, such as Anytime, Controlled, or Day/Night; “flat” does not necessarily mean one price all day. Mercury supplies the retail prices. **Flex Rates** instead use Mercury’s peak/off-peak periods and are not supported by the day/night calculations.
+
+- **Flat Rates Day/Night Support**: Separate prices and a locally calculated Rate — current after configuring the applicable meter-tariff hours.
+- **Usage Status**: Latest reading timestamp and actual/estimated status.
+- **Meter Registers**: Each register's billed reading, date, and read type in sensor attributes; these are not live counters.
+- **Plan Details**: Full rate tables, generation rates, other charges, plan code, and pending-change date in attributes. Check Mercury's GST treatment when comparing import and generation rates.
+
 ## 🔋 Energy Dashboard Integration
 
 The integration writes two long-term statistics on every coordinator update so Mercury data appears in the Home Assistant Energy Dashboard:
@@ -100,6 +109,17 @@ Up to **180 days of historical data** are backfilled on first install (from the 
 2. Under **Electricity grid**, click **Add consumption**. Pick the `mercury_co_nz:...` consumption statistic.
 3. Tick **Use an entity tracking the total costs**. Pick the `mercury_co_nz:...` cost statistic.
 4. (Optional but recommended) Set `homeassistant.currency: NZD` in `configuration.yaml` and restart, otherwise the dashboard cost labels may show `$` instead of `NZ$`.
+
+### Calculated Day/Night Usage
+
+After [configuring a schedule](#daynight-schedule), each meter provides calculated day/night long-term statistics from recorded hourly usage. Use these series to chart any date range; the plan attributes include their statistic IDs.
+
+- **Energy Dashboard**: Select either the existing combined consumption series or the day/night pair. Adding all three double-counts usage.
+- **History**: Uses recorded hourly readings only, initially from the available cache. Readings are retained privately in HA's `.storage` without automatic expiry; this feature does not download the full account history.
+- **Missing data**: Gaps remain gaps; daylight-saving days retain their actual 23 or 25 hourly readings.
+- **Corrections**: Revised readings rebuild totals. Changing the schedule creates a new statistics pair; select the new IDs from the sensor attributes. Disabling the schedule preserves existing history.
+
+These are **calculated splits**, not Mercury's billed register totals. Existing consumption/cost statistics are unchanged; current prices are never applied to historical usage. Imports resume on a regular coordinator refresh after startup.
 
 ### Multi-ICP Support — v2.0.0+
 
@@ -120,7 +140,7 @@ If your Mercury account has multiple ICPs (Installation Control Points — separ
 
 If you run **one Home Assistant instance per address** with all the meters on a single Mercury account, you can scope an instance to just its own ICP.
 
-**Settings → Devices & services → Mercury NZ → Configure → ICP for this instance.** Pick an ICP (choices are labelled with the address Mercury reports) and submit; the integration reloads.
+**Settings → Devices & services → Mercury NZ → Configure → Meters to include → ICP for this instance.** Pick an ICP (choices are labelled with the address Mercury reports) and submit; the integration reloads.
 
 With an ICP pinned:
 
@@ -184,25 +204,29 @@ Gas statistics use the same `mercury_co_nz:<id_prefix>_*` namespace as electrici
 
 ## 📊 Using with `dynamic_energy_cost` (per-appliance cost tracking)
 
-Five new sensors are exposed for the current electricity plan:
+The following sensors expose the current electricity plan:
 
 | Entity                                     | Unit       | Notes                                               |
 | ------------------------------------------ | ---------- | --------------------------------------------------- |
-| `sensor.mercury_nz_current_rate`           | `NZD/kWh`  | Current per-kWh price (NZD, not cents)              |
+| `sensor.mercury_nz_rate_current`           | `NZD/kWh`  | Scheduled per-kWh price; not a live API rate              |
+| `sensor.mercury_nz_rate_day`               | `NZD/kWh`  | Day price, when provided by Mercury                 |
+| `sensor.mercury_nz_rate_night`             | `NZD/kWh`  | Night price, when provided by Mercury               |
 | `sensor.mercury_nz_daily_fixed_charge`     | `NZD/day`  | Daily fixed charge from the active plan             |
 | `sensor.mercury_nz_current_plan`           | text       | Plan name (e.g. "Anytime", "Low User")              |
 | `sensor.mercury_nz_icp_number`             | text       | ICP / Installation Control Point identifier         |
 | `sensor.mercury_nz_plan_change_pending`    | `yes`/`no` | Surfaces upcoming plan transitions                  |
 
-To wire `sensor.mercury_nz_current_rate` into the [HACS dynamic_energy_cost](https://github.com/martinarva/dynamic_energy_cost) integration:
+Rates appear together as **Rate — current/day/night**; reading metadata appears under **Diagnostics**. Existing entity IDs are retained; use your entity’s ID when configuring dashboards.
+
+To wire `sensor.mercury_nz_rate_current` into the [HACS dynamic_energy_cost](https://github.com/martinarva/dynamic_energy_cost) integration:
 
 1. Install `dynamic_energy_cost` from HACS.
 2. Add the integration. For each appliance you want to track:
    - **Power sensor**: a kWh-emitting entity (e.g. a Tapo P110M smart plug's `..._energy_kwh` entity).
-   - **Price sensor**: `sensor.mercury_nz_current_rate`.
+   - **Price sensor**: `sensor.mercury_nz_rate_current`.
 3. The resulting cost sensor reads `power × current_rate` and labels the output in `hass.config.currency`. Set `currency: NZD` in `configuration.yaml` under `homeassistant:` if you want the labels to read NZD.
 
-**Note**: Mercury's API stores rates in NZ cents; this integration converts to NZD/kWh internally so dynamic_energy_cost computes correct values out of the box. Time-of-use (TOU) plans are not yet supported — only the "Anytime" rate is exposed in this release.
+**Note**: Rates are normalized to NZD/kWh. On Flat Rates plans with Day/Night meter tariffs, Rate — current remains unknown until a [schedule is configured](#daynight-schedule), then switches locally within one minute of each boundary. Anytime plans continue to use their single rate. Flex peak/off-peak schedules are not supported.
 
 ## 🚀 Installation
 
@@ -250,6 +274,17 @@ type: custom:mercury-energy-usage-card
 entity: sensor.mercury_nz_energy_usage
 name: Energy Usage Charts
 ```
+
+### Day/Night Schedule
+
+1. Open **Settings → Devices & services → Mercury CO NZ → Configure**.
+2. Choose **Meter tariff schedules**, then the meter to edit (selected automatically for single-meter accounts).
+3. Select your **lines company / region and tariff** to prefill published hours, or keep your current hours. Check or edit the times, weekend option, start date and time basis (NZ local time or fixed NZ standard time).
+4. Enable the schedule and save. Each meter has independent settings.
+
+**Disabled by default.** Presets include source links and were checked on 17 November 2026. They are suggestions for Flat Rates meter tariffs; confirm they match your Mercury plan. All networks are listed, but those without a verified compatible day/night schedule require manual hours. Saved overrides are never changed by catalogue updates. Separate prices remain available without a schedule.
+
+Supports whole-hour night periods, optionally with night pricing all Saturday/Sunday. Multiple peak/shoulder periods, public-holiday exceptions, half-hour boundaries and schedule changes within the selected history period are not supported.
 
 ### Configuration Options
 
@@ -485,7 +520,7 @@ sensors). They DO exist — look in **Developer Tools → States**:
 | `sensor.mercury_nz_current_plan` | States tab | `"Anytime"` (your plan name) |
 | `sensor.mercury_nz_icp_number` | States tab | `"0001263891UN390"` |
 | `sensor.mercury_nz_plan_change_pending` | States tab | `"yes"` / `"no"` |
-| `sensor.mercury_nz_current_rate` | States **and** Statistics tab | `0.2737` (NZD/kWh) |
+| `sensor.mercury_nz_rate_current` | States **and** Statistics tab | `0.2737` (NZD/kWh) |
 | `sensor.mercury_nz_daily_fixed_charge` | States **and** Statistics tab | `1.49` (NZD/day) |
 
 The first three have `state_class=None` and `unit=None` because their values
